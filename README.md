@@ -1,5 +1,7 @@
 # memshell-party-cli
 
+English | [中文](README.zh-CN.md)
+
 Command-line client **and** MCP server for [MemShellParty](https://party.mem.mk) — generate Java
 memory shells and probe shells straight from your terminal (or from an AI agent), talking to the
 same HTTP API that powers `party.mem.mk/ui`.
