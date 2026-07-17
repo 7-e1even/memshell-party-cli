@@ -246,7 +246,7 @@ Example Claude Code / Claude Desktop config:
 ```
 
 Exposed tools: `list_servers`, `list_config`, `list_packers`, `list_command_configs`,
-`generate_memshell`, `generate_probe`, `parse_classname`, `server_version`.
+`generate_memshell`, `generate_probe`, `parse_classname`, `server_version`, `connect_test`.
 
 ## AI skill (Claude Code)
 

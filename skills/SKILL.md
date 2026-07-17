@@ -18,7 +18,7 @@ Two equivalent interfaces — pick whichever is available:
 - **CLI**: `memparty <command> [flags]` (install: `npm install -g memshell-party-cli`, or `npx memshell-party-cli`).
 - **MCP tools** (if the `memshell-party` MCP server is connected): `list_servers`, `list_config`,
   `list_packers`, `list_command_configs`, `generate_memshell`, `generate_probe`, `parse_classname`,
-  `server_version`.
+  `server_version`, `connect_test`.
 
 The CLI is the source of truth for examples below; MCP tool args mirror the CLI flags
 (`-s/--server` → `server`, `-t/--tool` → `shellTool`, `-y/--type` → `shellType`, `-p/--packer` → `packer`).
@@ -158,6 +158,9 @@ response (the Suo5v2 shell checks it too):
 memparty connect -u <shell-url> -t godzilla --pass pass --key key \
   --header-name User-Agent --header-value <headerValue-from-gen-json>
 ```
+
+Over MCP the same check is the `connect_test` tool (`url`, `tool`, `pass`/`key`,
+`headerName`/`headerValue`, `suo5Mode`).
 
 ## Gotchas
 

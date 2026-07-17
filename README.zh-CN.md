@@ -243,7 +243,7 @@ Claude Code / Claude Desktop 配置示例：
 ```
 
 暴露的工具：`list_servers`、`list_config`、`list_packers`、`list_command_configs`、
-`generate_memshell`、`generate_probe`、`parse_classname`、`server_version`。
+`generate_memshell`、`generate_probe`、`parse_classname`、`server_version`、`connect_test`。
 
 ## AI 技能（Claude Code）
 

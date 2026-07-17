@@ -3,6 +3,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import { MemPartyClient } from "../api/client.js";
+import { testBehinder } from "../connect/behinder.js";
+import { testGodzilla } from "../connect/godzilla.js";
+import { testSuo5 } from "../connect/suo5.js";
+import type { ConnectTestResult } from "../connect/types.js";
 import { buildMemShellRequest } from "../core/request-builder.js";
 import { buildProbeRequest } from "../core/request-builder.js";
 import { CLI_VERSION } from "../version.js";
@@ -64,6 +68,30 @@ const probeInput = {
   server: z.string().optional(),
   reqParamName: z.string().optional(),
   commandTemplate: z.string().optional(),
+};
+
+const connectInput = {
+  url: z.string().describe("URL of the deployed shell"),
+  tool: z.enum(["godzilla", "behinder", "suo5"]).describe("shell tool to test"),
+  pass: z
+    .string()
+    .optional()
+    .describe("password (godzilla default: pass; behinder default: rebeyond)"),
+  key: z.string().optional().describe("godzilla key (default: key)"),
+  headerName: z
+    .string()
+    .optional()
+    .describe("gate header name from generate_memshell shellToolConfig (usually User-Agent)"),
+  headerValue: z
+    .string()
+    .optional()
+    .describe("gate header value from generate_memshell shellToolConfig — required for MemShellParty shells"),
+  suo5Mode: z
+    .enum(["auto", "v2", "v1"])
+    .optional()
+    .describe("suo5 protocol variant (default: auto)"),
+  insecure: z.boolean().optional().describe("skip TLS certificate verification"),
+  timeoutMs: z.number().optional().describe("request timeout in milliseconds (default 30000)"),
 };
 
 export function createMcpServer(client: MemPartyClient): McpServer {
@@ -171,6 +199,43 @@ export function createMcpServer(client: MemPartyClient): McpServer {
     async () => {
       try {
         return jsonContent(await client.getVersion());
+      } catch (err) {
+        return errorContent(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "connect_test",
+    {
+      title: "Test shell connection",
+      description:
+        "Test whether a deployed Godzilla / Behinder / suo5 shell is alive and the " +
+        "credentials work, by performing the tool's real protocol handshake. " +
+        "Pass the gate header (headerName/headerValue) from generate_memshell output for MemShellParty shells.",
+      inputSchema: connectInput,
+    },
+    async (args) => {
+      try {
+        const common = {
+          headerName: args.headerName,
+          headerValue: args.headerValue,
+          timeoutMs: args.timeoutMs,
+          insecure: args.insecure,
+        };
+        let result: ConnectTestResult;
+        switch (args.tool) {
+          case "godzilla":
+            result = await testGodzilla(args.url, args.pass ?? "pass", args.key ?? "key", common);
+            break;
+          case "behinder":
+            result = await testBehinder(args.url, args.pass ?? "rebeyond", common);
+            break;
+          case "suo5":
+            result = await testSuo5(args.url, { ...common, mode: args.suo5Mode });
+            break;
+        }
+        return jsonContent(result);
       } catch (err) {
         return errorContent(err);
       }
