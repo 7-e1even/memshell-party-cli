@@ -2,6 +2,7 @@ import { Command } from "commander";
 
 import { ApiError } from "./api/client.js";
 import { registerConfigCommand } from "./commands/config.js";
+import { registerConnectCommand } from "./commands/connect.js";
 import { registerGenCommand } from "./commands/gen.js";
 import { registerMcpCommand } from "./commands/mcp.js";
 import { registerParseClassNameCommand } from "./commands/parse-classname.js";
@@ -26,6 +27,7 @@ function buildProgram(): Command {
   registerGenCommand(program);
   registerProbeCommand(program);
   registerConfigCommand(program);
+  registerConnectCommand(program);
   registerParseClassNameCommand(program);
   registerVersionCommand(program);
   registerMcpCommand(program);

