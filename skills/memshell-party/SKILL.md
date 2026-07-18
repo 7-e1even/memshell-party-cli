@@ -38,6 +38,9 @@ memparty config command            # Command-tool encryptors & implementation cl
 
 Add `--json` for machine-readable output. Use the exact strings these return.
 
+Sanity-check backend reachability first with `memparty version` (prints the CLI and backend
+versions; over MCP: `server_version`).
+
 ## Step 1 — Pick the four core options
 
 Every memory shell needs **server → shell tool → shell type → packer**.
@@ -130,7 +133,7 @@ Common tool-specific flags:
 - Godzilla: `--godzilla-pass`, `--godzilla-key`
 - Behinder: `--behinder-pass`
 - AntSword: `--antsword-pass`
-- Command: `--command-param-name`, `--encryptor RAW|BASE64|DOUBLE_BASE64`, `--implementation-class RuntimeExec|ForkAndExec`
+- Command: `--command-param-name`, `--encryptor RAW|BASE64|DOUBLE_BASE64`, `--implementation-class RuntimeExec|ForkAndExec`, `--command-template`
 - All webshell tools: `--header-name` / `--header-value` (auth header the shell checks)
 - Custom: `--shell-class-file path.class` (or `--shell-class-base64`)
 - Injector: `--url-pattern /*`, `--injector-class-name`, `--no-static-initialize`
@@ -162,6 +165,9 @@ memparty connect -u <shell-url> -t godzilla --pass pass --key key \
 
 Over MCP the same check is the `connect_test` tool (`url`, `tool`, `pass`/`key`,
 `headerName`/`headerValue`, `suo5Mode`).
+
+Self-signed TLS → add `-k/--insecure`; extra headers (cookies etc.) → repeatable
+`-H "Name: value"`. Both flags exist on `exec` too (over MCP: `insecure`, `timeoutMs`).
 
 ## Step 5 — Execute commands on the shell
 
