@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  autoSaveShell,
   getProject,
   listProjects,
   removeProject,
@@ -141,5 +142,51 @@ describe("resolveConnection", () => {
     expect(conn.targetName).toBeUndefined();
     expect(() => resolveConnection(undefined, { tool: "godzilla" })).toThrow(/no URL/);
     expect(() => resolveConnection(undefined, { url: "http://x" })).toThrow(/--tool is required/);
+  });
+});
+
+describe("autoSaveShell", () => {
+  const conn = {
+    url: "http://192.0.2.1:8080/shell.jsp",
+    tool: "behinder" as const,
+    pass: "rebeyond",
+    headerName: "User-Agent",
+    headerValue: "gate123",
+    extraHeaders: {},
+  };
+
+  it("derives <host>/<tool> and resolves afterwards", () => {
+    const name = autoSaveShell(conn);
+    expect(name).toBe("192.0.2.1/behinder");
+    const resolved = resolveConnection("192.0.2.1", {});
+    expect(resolved.url).toBe(conn.url);
+    expect(resolved.pass).toBe("rebeyond");
+    expect(resolved.headerValue).toBe("gate123");
+  });
+
+  it("overwrites when the same URL is saved again", () => {
+    autoSaveShell(conn);
+    const name = autoSaveShell({ ...conn, pass: "newpass" });
+    expect(name).toBe("192.0.2.1/behinder");
+    expect(Object.keys(getProject("192.0.2.1")!.shells)).toEqual(["behinder"]);
+    expect(getProject("192.0.2.1")!.shells["behinder"]!.pass).toBe("newpass");
+  });
+
+  it("suffixes a different URL on the same host+tool", () => {
+    autoSaveShell(conn);
+    const name = autoSaveShell({ ...conn, url: "http://192.0.2.1:8080/other.jsp" });
+    expect(name).toBe("192.0.2.1/behinder-8080");
+  });
+
+  it("keeps tools separated on the same host", () => {
+    autoSaveShell(conn);
+    const name = autoSaveShell({ ...conn, tool: "godzilla" });
+    expect(name).toBe("192.0.2.1/godzilla");
+  });
+
+  it("sanitizes odd hostnames", () => {
+    const name = autoSaveShell({ ...conn, url: "http://[::1]:9000/s.jsp" });
+    expect(name).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/);
+    expect(resolveConnection(name, {}).url).toBe("http://[::1]:9000/s.jsp");
   });
 });

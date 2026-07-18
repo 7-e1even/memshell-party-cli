@@ -14,7 +14,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type OpCategory = "gen" | "probe" | "connect" | "exec" | "target";
+export type OpCategory = "gen" | "probe" | "connect" | "exec" | "save" | "note" | "remove";
 
 export interface OpLogEntry {
   /** ISO timestamp. */

@@ -32,7 +32,7 @@ describe("logOp / readOps", () => {
   it("filters by category", () => {
     logOp({ category: "connect", action: "connect", ok: true });
     logOp({ category: "exec", action: "exec", ok: true, command: "id" });
-    logOp({ category: "target", action: "save", ok: true });
+    logOp({ category: "save", action: "save", ok: true });
     const entries = readOps({ category: "exec" });
     expect(entries).toHaveLength(1);
     expect(entries[0]!.command).toBe("id");

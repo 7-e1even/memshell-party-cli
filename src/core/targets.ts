@@ -194,6 +194,52 @@ export interface ResolvedConnection {
   targetName?: string;
 }
 
+function sanitizeName(name: string): string {
+  const s = name.replace(/[^A-Za-z0-9._-]/g, "_");
+  return /^[A-Za-z0-9]/.test(s) ? s : `x${s}`;
+}
+
+/**
+ * Auto-save a verified connection under a derived `<host>/<tool>` name and
+ * return the canonical reference. A slot already pointing at the same URL is
+ * overwritten; a name taken by a different URL gets a numeric/port suffix.
+ */
+export function autoSaveShell(conn: ResolvedConnection): string {
+  let host = "target";
+  let port = "";
+  try {
+    const u = new URL(conn.url);
+    host = u.hostname || host;
+    port = u.port;
+  } catch {
+    // keep the fallback name
+  }
+  const projectName = sanitizeName(host) || "target";
+  const existing = getProject(projectName)?.shells ?? {};
+
+  let shellName = Object.keys(existing).find(
+    (n) => existing[n]!.url === conn.url && existing[n]!.tool === conn.tool,
+  );
+  if (!shellName) {
+    const base = sanitizeName(conn.tool) || "shell";
+    shellName = base;
+    if (existing[shellName]) shellName = port ? `${base}-${port}` : `${base}-2`;
+    for (let i = 2; existing[shellName]; i++) shellName = `${base}-${i}`;
+  }
+
+  saveShell(projectName, shellName, {
+    url: conn.url,
+    tool: conn.tool,
+    pass: conn.pass,
+    key: conn.key,
+    headerName: conn.headerName,
+    headerValue: conn.headerValue,
+    extraHeaders: Object.keys(conn.extraHeaders).length > 0 ? conn.extraHeaders : undefined,
+    insecure: conn.insecure,
+  });
+  return `${projectName}/${shellName}`;
+}
+
 /**
  * Merge an optional saved shell reference (`<project>/<shell>` or a bare
  * project holding exactly one shell) with explicit flags.
@@ -213,7 +259,7 @@ export function resolveConnection(
 
     const project = getProject(projectName);
     if (!project) {
-      throw new Error(`unknown project ${JSON.stringify(projectName)} — see 'memparty target list'`);
+      throw new Error(`unknown project ${JSON.stringify(projectName)} — see 'memparty list'`);
     }
     if (!shellName) {
       const names = Object.keys(project.shells);

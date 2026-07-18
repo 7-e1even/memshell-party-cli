@@ -14,6 +14,15 @@ export function registerParseClassNameCommand(program: Command): void {
     .description("Parse the fully-qualified class name from a .class file")
     .argument("[base64]", "base64-encoded .class bytes (omit when using --file)")
     .option("-f, --file <path>", "read a .class file from disk instead of passing base64")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  $ memparty parse-classname -f shell.class
+  $ memparty parse-classname "$(memparty gen -s Tomcat -t Command -y Filter \\
+      -p DefaultBase64 --command-param-name cmd)"
+`,
+    )
     .action(async (base64: string | undefined, opts: ParseCmdOptions, cmd: Command) => {
       let classBase64: string;
       if (opts.file) {

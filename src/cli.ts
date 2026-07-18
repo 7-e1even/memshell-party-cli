@@ -1,6 +1,7 @@
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 
 import { ApiError } from "./api/client.js";
+import { reportError } from "./cli-context.js";
 import { registerConfigCommand } from "./commands/config.js";
 import { registerConnectCommand } from "./commands/connect.js";
 import { registerExecCommand } from "./commands/exec.js";
@@ -12,6 +13,7 @@ import { registerProbeCommand } from "./commands/probe.js";
 import { registerTargetCommand } from "./commands/target.js";
 import { registerVersionCommand } from "./commands/version.js";
 import { DEFAULT_API_URL, ENV_VAR } from "./core/config.js";
+import { startRepl } from "./repl.js";
 import { CLI_VERSION } from "./version.js";
 
 function buildProgram(): Command {
@@ -25,7 +27,22 @@ function buildProgram(): Command {
       "--api <url>",
       `MemShellParty backend URL (env ${ENV_VAR}, default ${DEFAULT_API_URL})`,
     )
-    .option("--timeout <ms>", "request timeout in milliseconds", "30000");
+    .option("--timeout <ms>", "request timeout in milliseconds", "30000")
+    .exitOverride() // throw instead of process.exit — needed by the REPL and the JSON error path
+    .addHelpText(
+      "after",
+      `
+Quick start:
+  $ memparty gen                                   # interactive memory-shell wizard
+  $ memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 -o shell.class
+  $ memparty connect -u http://192.0.2.1/shell.jsp -t godzilla --header-value my-secret-token
+  $ memparty exec 192.0.2.1/godzilla --cmd whoami    # auto-saved by a successful connect
+  $ memparty list                                  # saved targets
+  $ memparty log                                   # recent operations
+
+Every subcommand has its own examples: memparty <command> --help
+`,
+    );
 
   registerGenCommand(program);
   registerProbeCommand(program);
@@ -42,6 +59,12 @@ function buildProgram(): Command {
 }
 
 async function main(): Promise<void> {
+  // bare `memparty` in a terminal drops into the REPL; piped/CI keeps printing help
+  if (process.argv.length <= 2 && (process.stdin.isTTY || process.env.MEMPARTY_REPL)) {
+    await startRepl(buildProgram);
+    return;
+  }
+
   const program = buildProgram();
   try {
     await program.parseAsync(process.argv);
@@ -49,8 +72,11 @@ async function main(): Promise<void> {
     // Set exitCode rather than calling process.exit(): an abrupt exit while
     // undici's (global fetch) keep-alive socket is still open trips a libuv
     // assertion on Windows. Letting the event loop drain avoids the crash.
-    if (err instanceof ApiError) {
-      process.stderr.write(`API error (${err.status || "network"}): ${err.message}\n`);
+    if (err instanceof CommanderError) {
+      // exitOverride: commander already printed help/usage/version; keep its exit code
+      process.exitCode = err.exitCode;
+    } else if (err instanceof ApiError) {
+      reportError(`API error (${err.status || "network"}): ${err.message}`, process.argv);
       process.exitCode = 1;
     } else if (err instanceof Error) {
       // Inquirer throws this when the user aborts with Ctrl-C.
@@ -58,11 +84,11 @@ async function main(): Promise<void> {
         process.stderr.write("\nAborted.\n");
         process.exitCode = 130;
       } else {
-        process.stderr.write(`Error: ${err.message}\n`);
+        reportError(err.message, process.argv);
         process.exitCode = 1;
       }
     } else {
-      process.stderr.write(`Error: ${String(err)}\n`);
+      reportError(String(err), process.argv);
       process.exitCode = 1;
     }
   }

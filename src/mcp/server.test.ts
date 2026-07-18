@@ -231,10 +231,10 @@ describe("MCP connect_test tool", () => {
       const actions = payload.entries.map(
         (e: { category: string; action: string }) => `${e.category}:${e.action}`,
       );
-      expect(actions).toContain("target:save");
+      expect(actions).toContain("save:save");
       expect(actions).toContain("connect:connect");
       expect(actions).toContain("exec:exec");
-      expect(actions).toContain("target:remove");
+      expect(actions).toContain("remove:remove");
 
       const execOnly = (await mcpClient.callTool({
         name: "log_list",

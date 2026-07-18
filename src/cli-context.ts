@@ -22,3 +22,12 @@ export function logError(msg: string): void {
 export function logInfo(msg: string): void {
   process.stderr.write(`${msg}\n`);
 }
+
+/** Report a fatal error; as JSON when --json is in argv, so agents can parse it. */
+export function reportError(message: string, argv: string[]): void {
+  if (argv.includes("--json")) {
+    process.stdout.write(`${JSON.stringify({ ok: false, error: message })}\n`);
+  } else {
+    process.stderr.write(`Error: ${message}\n`);
+  }
+}

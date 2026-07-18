@@ -198,10 +198,10 @@ Flag soup gets old fast. Save each working shell into a **project** (a named gro
 with an optional remark and category), then reference it as `<project>/<shell>`:
 
 ```bash
-memparty target save web1/bh9060 -u <shell-url> -t behinder --pass rebeyond \
+memparty save web1/bh9060 -u <shell-url> -t behinder --pass rebeyond \
   --header-name User-Agent --header-value <headerValue-from-gen-json> \
   --remark "内网测试环境" --category test --shell-remark "root 权限"
-memparty target list                      # everything, or --category test
+memparty list                      # everything, or --category test
 memparty exec web1/bh9060 --cmd "whoami" # no other flags needed
 memparty exec web1 --cmd "id"            # bare project works when it holds one shell
 ```
@@ -214,7 +214,7 @@ The store lives at `~/.memparty/targets.json`.
 
 ## Step 7 — Audit with the operation log
 
-Every operation (gen, probe, connect, exec, target save/note/remove) is appended to
+Every operation (gen, probe, connect, exec, save/note/remove) is appended to
 `~/.memparty/operations.jsonl` — no credentials, no payload bytes; exec output is truncated.
 Query it to recall what was done against a target:
 

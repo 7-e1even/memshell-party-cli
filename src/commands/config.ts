@@ -17,7 +17,17 @@ function printJsonOrLines(data: unknown, json: boolean | undefined, renderLines:
 export function registerConfigCommand(program: Command): void {
   const config = program
     .command("config")
-    .description("Query supported servers, shell tools, shell types, and packers");
+    .description("Query supported servers, shell tools, shell types, and packers")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  $ memparty config servers          # servers + their shell types (values for gen -s)
+  $ memparty config tools Tomcat     # tools available on one server (values for gen -t)
+  $ memparty config packers          # packer tree (values for gen -p)
+  $ memparty config command          # Command-tool encryptors and impl classes
+`,
+    );
 
   config
     .command("servers")

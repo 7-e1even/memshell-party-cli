@@ -12,14 +12,16 @@ interface LogCmdOptions {
 export function registerLogCommand(program: Command): void {
   program
     .command("log")
-    .description("Show the global operation log (every gen/probe/connect/exec/target op)")
+    .description("Show the global operation log")
     .addOption(
       new Option("--category <name>", "filter by operation category").choices([
         "gen",
         "probe",
         "connect",
         "exec",
-        "target",
+        "save",
+        "note",
+        "remove",
       ]),
     )
     .option(
@@ -34,6 +36,7 @@ export function registerLogCommand(program: Command): void {
 Examples:
   $ memparty log                          # latest 50 operations
   $ memparty log --category exec          # only command executions
+  $ memparty log --category save          # only target saves
   $ memparty log --target web1           # everything against project web1
   $ memparty log --category exec --target 192.0.2.10 --json
 `,

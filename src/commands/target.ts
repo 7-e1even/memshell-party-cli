@@ -46,14 +46,35 @@ function parseRef(ref: string): { project: string; shell?: string } {
   return { project: ref.slice(0, slash), shell: ref.slice(slash + 1) };
 }
 
-export function registerTargetCommand(program: Command): void {
-  const target = program
-    .command("target")
-    .description(
-      "Manage named shell targets: projects (remark + category) grouping several shells",
-    );
+function listTargets(opts: { category?: string; json?: boolean }): void {
+  const all = listProjects();
+  const names = Object.keys(all).filter(
+    (n) => opts.category === undefined || all[n]!.category === opts.category,
+  );
+  if (opts.json) {
+    const filtered: Record<string, unknown> = {};
+    for (const n of names) filtered[n] = all[n];
+    process.stdout.write(`${JSON.stringify(filtered, null, 2)}\n`);
+    return;
+  }
+  if (names.length === 0) {
+    process.stdout.write(`no saved projects (store: ${targetStorePath()})\n`);
+    return;
+  }
+  for (const name of names) {
+    const p = all[name]!;
+    const meta =
+      [p.category ? `[${p.category}]` : undefined, p.remark].filter(Boolean).join("  ");
+    process.stdout.write(`${name}${meta ? `  ${meta}` : ""}\n`);
+    for (const [shellName, s] of Object.entries(p.shells)) {
+      const line = `  ${name}/${shellName}  ${s.tool}  ${s.url}`;
+      process.stdout.write(`${line}${s.remark ? `  — ${s.remark}` : ""}\n`);
+    }
+  }
+}
 
-  target
+export function registerTargetCommand(program: Command): void {
+  program
     .command("save")
     .description(
       "Save a shell connection profile as <project>/<shell> (overwrites an existing shell)",
@@ -77,10 +98,14 @@ export function registerTargetCommand(program: Command): void {
       "after",
       `
 Examples:
-  $ memparty target save web1/bh9060 -u http://192.0.2.10:9060/console/service \\
+  $ memparty save web1/bh9060 -u http://192.0.2.10:9060/console/service \\
       -t behinder --pass rebeyond --header-name User-Agent --header-value my-secret-token \\
       --remark "内网测试环境" --category test
+  $ memparty list                            # show saved targets
   $ memparty exec web1/bh9060 --cmd "whoami"
+
+Note: connect/exec already auto-save a verified shell as <host>/<tool>;
+save is for choosing the name by hand.
 `,
     )
     .action((ref: string, opts: TargetSaveOptions) => {
@@ -113,7 +138,7 @@ Examples:
       };
       const stored = saveShell(project, shell, input);
       logOp({
-        category: "target",
+        category: "save",
         action: "save",
         targetName: `${project}/${shell}`,
         url: stored.url,
@@ -137,7 +162,7 @@ Examples:
       }
     });
 
-  target
+  program
     .command("note")
     .description("Set a remark/category on a project, or a remark on a shell (<project>[/<shell>])")
     .argument("<ref>", "project name or <project>/<shell>")
@@ -158,7 +183,7 @@ Examples:
         }
         const updated = saveShellMeta(project, shell, { remark: opts.remark });
         logOp({
-          category: "target",
+          category: "note",
           action: "note",
           targetName: `${project}/${shell}`,
           ok: true,
@@ -183,7 +208,7 @@ Examples:
         category: opts.category,
       });
       logOp({
-        category: "target",
+        category: "note",
         action: "note",
         targetName: project,
         ok: true,
@@ -194,39 +219,14 @@ Examples:
       );
     });
 
-  target
+  program
     .command("list")
     .description("List saved projects and their shells")
     .option("--category <name>", "only show projects in this category")
     .option("--json", "output raw JSON")
-    .action((opts: { category?: string; json?: boolean }) => {
-      const all = listProjects();
-      const names = Object.keys(all).filter(
-        (n) => opts.category === undefined || all[n]!.category === opts.category,
-      );
-      if (opts.json) {
-        const filtered: Record<string, unknown> = {};
-        for (const n of names) filtered[n] = all[n];
-        process.stdout.write(`${JSON.stringify(filtered, null, 2)}\n`);
-        return;
-      }
-      if (names.length === 0) {
-        process.stdout.write(`no saved projects (store: ${targetStorePath()})\n`);
-        return;
-      }
-      for (const name of names) {
-        const p = all[name]!;
-        const meta =
-          [p.category ? `[${p.category}]` : undefined, p.remark].filter(Boolean).join("  ");
-        process.stdout.write(`${name}${meta ? `  ${meta}` : ""}\n`);
-        for (const [shellName, s] of Object.entries(p.shells)) {
-          const line = `  ${name}/${shellName}  ${s.tool}  ${s.url}`;
-          process.stdout.write(`${line}${s.remark ? `  — ${s.remark}` : ""}\n`);
-        }
-      }
-    });
+    .action(listTargets);
 
-  target
+  program
     .command("remove")
     .description("Remove a whole project or a single shell (<project>[/<shell>])")
     .argument("<ref>", "project name or <project>/<shell>")
@@ -234,7 +234,7 @@ Examples:
       const { project, shell } = parseRef(ref);
       const removed = shell ? removeShell(project, shell) : removeProject(project);
       logOp({
-        category: "target",
+        category: "remove",
         action: "remove",
         targetName: ref,
         ok: removed,

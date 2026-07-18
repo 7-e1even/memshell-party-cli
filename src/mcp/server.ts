@@ -9,6 +9,7 @@ import { testSuo5 } from "../connect/suo5.js";
 import type { ConnectTestResult, ExecResult } from "../connect/types.js";
 import { logOp, opLogPath, readOps, truncateOutput, type OpCategory } from "../core/oplog.js";
 import {
+  autoSaveShell,
   listProjects,
   removeProject,
   removeShell,
@@ -334,7 +335,9 @@ export function createMcpServer(client: MemPartyClient): McpServer {
         "Test whether a deployed Godzilla / Behinder / suo5 shell is alive and the " +
         "credentials work, by performing the tool's real protocol handshake. " +
         "Pass a saved target `name`, or url+tool with the gate header " +
-        "(headerName/headerValue) from generate_memshell output for MemShellParty shells.",
+        "(headerName/headerValue) from generate_memshell output for MemShellParty shells. " +
+        "On success the profile is auto-saved and the canonical name returned as " +
+        "`savedAs` — reuse it as `name` in later calls.",
       inputSchema: connectInput,
     },
     async (args) => {
@@ -369,6 +372,12 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           default:
             throw new Error(`unknown tool ${String(conn.tool)}`);
         }
+        // a successful handshake proves the credentials — keep them as a named target
+        let savedAs: string | undefined;
+        if (result.ok && conn.targetName === undefined) {
+          savedAs = autoSaveShell(conn);
+          conn.targetName = savedAs;
+        }
         logOp({
           category: "connect",
           action: "connect",
@@ -380,7 +389,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           detail: result.detail,
           error: result.error,
         });
-        return jsonContent(result);
+        return jsonContent(savedAs !== undefined ? { ...result, savedAs } : result);
       } catch (err) {
         return errorContent(err);
       }
@@ -396,7 +405,8 @@ export function createMcpServer(client: MemPartyClient): McpServer {
         "stdout+stderr. Uses the tool's real protocol (Godzilla execCommand method / " +
         "Behinder Cmd payload). Run connect_test first to verify credentials; pass a " +
         "saved target `name`, or url+tool with the same gate header " +
-        "(headerName/headerValue) for MemShellParty shells.",
+        "(headerName/headerValue) for MemShellParty shells. On success the profile " +
+        "is auto-saved and the canonical name returned as `savedAs`.",
       inputSchema: execInput,
     },
     async (args) => {
@@ -434,6 +444,12 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           default:
             throw new Error(`exec supports godzilla | behinder (got ${String(conn.tool)})`);
         }
+        // a successful exec proves the credentials — keep them as a named target
+        let savedAs: string | undefined;
+        if (result.ok && conn.targetName === undefined) {
+          savedAs = autoSaveShell(conn);
+          conn.targetName = savedAs;
+        }
         const truncated = result.output !== undefined ? truncateOutput(result.output) : null;
         logOp({
           category: "exec",
@@ -448,7 +464,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           outputTruncated: truncated?.truncated || undefined,
           error: result.error,
         });
-        return jsonContent(result);
+        return jsonContent(savedAs !== undefined ? { ...result, savedAs } : result);
       } catch (err) {
         return errorContent(err);
       }
@@ -484,7 +500,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           remark: args.shellRemark,
         });
         logOp({
-          category: "target",
+          category: "save",
           action: "save",
           targetName: `${args.project}/${args.shell}`,
           url: args.url,
@@ -526,7 +542,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           }
           const updated = saveShellMeta(args.project, args.shell, { remark: args.remark });
           logOp({
-            category: "target",
+            category: "note",
             action: "note",
             targetName: `${args.project}/${args.shell}`,
             ok: true,
@@ -543,7 +559,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           category: args.category,
         });
         logOp({
-          category: "target",
+          category: "note",
           action: "note",
           targetName: args.project,
           ok: true,
@@ -599,7 +615,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           : removeProject(args.project);
         if (!removed) throw new Error(`unknown target ${args.project}/${args.shell ?? ""}`);
         logOp({
-          category: "target",
+          category: "remove",
           action: "remove",
           targetName: args.shell ? `${args.project}/${args.shell}` : args.project,
           ok: true,
@@ -617,11 +633,11 @@ export function createMcpServer(client: MemPartyClient): McpServer {
     {
       title: "List operation log",
       description:
-        "Read the global operation log (every gen/probe/connect/exec/target op), " +
+        "Read the global operation log (every gen/probe/connect/exec/save/note/remove op), " +
         "newest first. Filter by category and/or target.",
       inputSchema: {
         category: z
-          .enum(["gen", "probe", "connect", "exec", "target"])
+          .enum(["gen", "probe", "connect", "exec", "save", "note", "remove"])
           .optional()
           .describe("operation category"),
         target: z

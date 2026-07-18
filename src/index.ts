@@ -26,6 +26,7 @@ export {
 } from "./core/oplog.js";
 export { createMcpServer, startMcpStdio } from "./mcp/server.js";
 export {
+  autoSaveShell,
   getProject,
   listProjects,
   removeProject,
