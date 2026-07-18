@@ -1,6 +1,6 @@
 {
   "name": "memshell-party-cli",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Command-line client and MCP server for MemShellParty (party.mem.mk) — generate Java memory shells and probes from the terminal.",
   "keywords": [
     "memshell",
