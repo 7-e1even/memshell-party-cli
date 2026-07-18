@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { aesEcbDecrypt, aesEcbEncrypt, gunzipLenient, gzip, md5Hex, md5Key16 } from "./crypto.js";
-import { testGodzilla } from "./godzilla.js";
+import { execGodzilla, testGodzilla } from "./godzilla.js";
 
 const GATE = "gdz-gate-value";
 const PASS = "pass";
@@ -35,6 +35,7 @@ function parseSerialized(data: Buffer): Map<string, Buffer> {
 interface MockState {
   payloadLoaded: boolean;
   sawCookieOnSecondRequest: boolean;
+  basicsInfoCalls: number;
 }
 
 function startMock(state: MockState): Promise<Server> {
@@ -64,24 +65,41 @@ function startMock(state: MockState): Promise<Server> {
         return fail();
       }
 
-      if (!state.payloadLoaded) {
-        if (data.readUInt32BE(0) !== 0xcafebabe) return fail();
+      // payload class upload: define it, hand out a session cookie
+      if (data.readUInt32BE(0) === 0xcafebabe) {
         state.payloadLoaded = true;
         res.setHeader("Set-Cookie", "JSESSIONID=abc123; Path=/");
         return fail();
       }
+      if (!state.payloadLoaded) return fail();
 
       if (req.headers.cookie?.includes("JSESSIONID=abc123")) {
         state.sawCookieOnSecondRequest = true;
       }
 
       const params = parseSerialized(gunzipLenient(data));
-      if (params.get("methodName")?.toString() !== "test") return fail();
-      const wrapped =
-        WRAP.slice(0, 16) +
-        aesEcbEncrypt(gzip(Buffer.from("ok")), XC).toString("base64") +
-        WRAP.slice(16);
-      res.writeHead(200).end(wrapped);
+      const method = params.get("methodName")?.toString();
+      const reply = (out: string) => {
+        const wrapped =
+          WRAP.slice(0, 16) +
+          aesEcbEncrypt(gzip(Buffer.from(out)), XC).toString("base64") +
+          WRAP.slice(16);
+        res.writeHead(200).end(wrapped);
+      };
+
+      if (method === "test") return reply("ok");
+      if (method === "getBasicsInfo") {
+        state.basicsInfoCalls++;
+        const osName = req.url === "/godzilla-linux" ? "Linux" : "Windows 10";
+        return reply(`OsInfo : os.name: ${osName} os.version: 1 os.arch: amd64\n`);
+      }
+      if (method === "execCommand") {
+        const n = Number(params.get("argsCount")?.toString() ?? "0");
+        const argv: string[] = [];
+        for (let i = 0; i < n; i++) argv.push(params.get(`arg-${i}`)?.toString() ?? "");
+        return reply(`MOCK-EXEC:${argv.join(" ")}`);
+      }
+      return fail();
     });
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
@@ -90,7 +108,7 @@ function startMock(state: MockState): Promise<Server> {
 describe("testGodzilla", () => {
   let server: Server;
   let base: string;
-  const state: MockState = { payloadLoaded: false, sawCookieOnSecondRequest: false };
+  const state: MockState = { payloadLoaded: false, sawCookieOnSecondRequest: false, basicsInfoCalls: 0 };
 
   beforeAll(async () => {
     server = await startMock(state);
@@ -133,5 +151,59 @@ describe("testGodzilla", () => {
     const result = await testGodzilla("http://127.0.0.1:1/x", "pass", "key", { timeoutMs: 2000 });
     expect(result.ok).toBe(false);
     expect(result.error).toBeTruthy();
+  });
+});
+
+describe("execGodzilla", () => {
+  let server: Server;
+  let base: string;
+  const state: MockState = { payloadLoaded: false, sawCookieOnSecondRequest: false, basicsInfoCalls: 0 };
+
+  beforeAll(async () => {
+    server = await startMock(state);
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(() => new Promise((resolve) => server.close(resolve)));
+
+  it("wraps the command in cmd.exe on auto-detected Windows", async () => {
+    const result = await execGodzilla(`${base}/godzilla`, "pass", "key", "whoami", {
+      headerValue: GATE,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe("MOCK-EXEC:cmd.exe /c whoami");
+  });
+
+  it("wraps the command in /bin/sh on auto-detected Linux", async () => {
+    const result = await execGodzilla(`${base}/godzilla-linux`, "pass", "key", "id", {
+      headerValue: GATE,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe("MOCK-EXEC:/bin/sh -c id");
+  });
+
+  it("skips OS detection when os is given explicitly", async () => {
+    state.basicsInfoCalls = 0;
+    const result = await execGodzilla(`${base}/godzilla`, "pass", "key", "id", {
+      headerValue: GATE,
+      os: "linux",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe("MOCK-EXEC:/bin/sh -c id");
+    expect(state.basicsInfoCalls).toBe(0);
+  });
+
+  it("fails with a wrong key", async () => {
+    const result = await execGodzilla(`${base}/godzilla`, "pass", "wrong", "id", {
+      headerValue: GATE,
+      os: "linux",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+
+  it("fails without the gate header", async () => {
+    const result = await execGodzilla(`${base}/godzilla`, "pass", "key", "id", { os: "linux" });
+    expect(result.ok).toBe(false);
   });
 });

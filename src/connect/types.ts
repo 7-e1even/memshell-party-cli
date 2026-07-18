@@ -13,6 +13,19 @@ export interface ConnectTestResult {
   durationMs: number;
 }
 
+export interface ExecResult {
+  ok: boolean;
+  tool: ConnectTool;
+  url: string;
+  /** The command line as executed remotely. */
+  command: string;
+  /** Decoded remote stdout+stderr (present on success). */
+  output?: string;
+  /** Human-readable failure reason. */
+  error?: string;
+  durationMs: number;
+}
+
 export interface CommonConnectOptions {
   /**
    * MemShellParty shells are gated by a header check:

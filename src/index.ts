@@ -13,9 +13,36 @@ export {
 export { emitPayload, shouldDecode, type OutputOptions, type OutputResult } from "./core/output.js";
 export { resolveApiUrl, DEFAULT_API_URL, ENV_VAR } from "./core/config.js";
 export { resolveJreVersion, JDK_VERSIONS } from "./core/jdk.js";
+export {
+  formatOp,
+  logOp,
+  opLogPath,
+  readOps,
+  truncateOutput,
+  OUTPUT_LIMIT,
+  type OpCategory,
+  type OpFilter,
+  type OpLogEntry,
+} from "./core/oplog.js";
 export { createMcpServer, startMcpStdio } from "./mcp/server.js";
-export { testBehinder, type BehinderConnectOptions } from "./connect/behinder.js";
-export { testGodzilla } from "./connect/godzilla.js";
+export {
+  getProject,
+  listProjects,
+  removeProject,
+  removeShell,
+  resolveConnection,
+  saveProjectMeta,
+  saveShell,
+  saveShellMeta,
+  targetStorePath,
+  type ConnectionFlags,
+  type ResolvedConnection,
+  type ShellInput,
+  type StoredProject,
+  type StoredShell,
+} from "./core/targets.js";
+export { execBehinder, testBehinder, type BehinderConnectOptions } from "./connect/behinder.js";
+export { execGodzilla, testGodzilla, type GodzillaExecOptions } from "./connect/godzilla.js";
 export {
   testSuo5,
   marshalSuo5Map,
@@ -29,5 +56,6 @@ export type {
   CommonConnectOptions,
   ConnectTestResult,
   ConnectTool,
+  ExecResult,
 } from "./connect/types.js";
 export { CLI_VERSION } from "./version.js";

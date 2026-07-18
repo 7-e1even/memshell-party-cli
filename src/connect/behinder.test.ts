@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { testBehinder } from "./behinder.js";
+import { execBehinder, testBehinder } from "./behinder.js";
 import { readStringConstant } from "./classfile.js";
 import { aesEcbDecrypt, aesEcbEncrypt, md5Key16 } from "./crypto.js";
 
@@ -22,6 +22,18 @@ function echoReply(classBytes: Buffer, rawWithMagic: boolean): Buffer {
     return Buffer.concat([encrypted, Buffer.alloc(magic, 0x55)]);
   }
   return Buffer.from(encrypted.toString("base64"));
+}
+
+/** Emulate the Cmd payload: run status/msg envelope for the injected `cmd`. */
+function cmdReply(classBytes: Buffer): Buffer {
+  const cmd = readStringConstant(classBytes, "cmd") ?? "";
+  const status = cmd === "please-fail" ? "fail" : "success";
+  const msg = cmd === "please-fail" ? "boom" : `MOCK-EXEC:${cmd}`;
+  const json = JSON.stringify({
+    status: Buffer.from(status).toString("base64"),
+    msg: Buffer.from(msg).toString("base64"),
+  });
+  return Buffer.from(aesEcbEncrypt(Buffer.from(json, "utf8"), KEY).toString("base64"));
 }
 
 function startMock(): Promise<Server> {
@@ -48,6 +60,11 @@ function startMock(): Promise<Server> {
       if (!classBytes || classBytes.readUInt32BE(0) !== 0xcafebabe) return fail();
 
       const raw = req.url === "/behinder-raw";
+      // the Cmd payload carries a `cmd` field instead of Echo's `content`
+      if (readStringConstant(classBytes, "cmd") !== null) {
+        res.writeHead(200).end(cmdReply(classBytes));
+        return;
+      }
       res.writeHead(200).end(echoReply(classBytes, raw));
     });
   });
@@ -93,5 +110,49 @@ describe("testBehinder", () => {
     const result = await testBehinder("http://127.0.0.1:1/x", "rebeyond", { timeoutMs: 2000 });
     expect(result.ok).toBe(false);
     expect(result.error).toBeTruthy();
+  });
+});
+
+describe("execBehinder", () => {
+  let server: Server;
+  let base: string;
+
+  beforeAll(async () => {
+    server = await startMock();
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(() => new Promise((resolve) => server.close(resolve)));
+
+  it("runs the injected command and returns its output", async () => {
+    const result = await execBehinder(`${base}/behinder`, "rebeyond", "id", {
+      headerValue: GATE,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe("MOCK-EXEC:id");
+  });
+
+  it("handles commands with spaces and shell metacharacters", async () => {
+    const cmd = "sh -c 'echo a; echo b' | tail -1";
+    const result = await execBehinder(`${base}/behinder`, "rebeyond", cmd, {
+      headerValue: GATE,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe(`MOCK-EXEC:${cmd}`);
+  });
+
+  it("surfaces a remote failure status with its message", async () => {
+    const result = await execBehinder(`${base}/behinder`, "rebeyond", "please-fail", {
+      headerValue: GATE,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("boom");
+  });
+
+  it("fails with a wrong password", async () => {
+    const result = await execBehinder(`${base}/behinder`, "wrongpass", "id", {
+      headerValue: GATE,
+    });
+    expect(result.ok).toBe(false);
   });
 });

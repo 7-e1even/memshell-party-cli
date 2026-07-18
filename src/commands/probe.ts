@@ -1,6 +1,7 @@
 import { Command, Option } from "commander";
 
 import { createClient, type GlobalOptions, logInfo } from "../cli-context.js";
+import { logOp } from "../core/oplog.js";
 import { emitPayload } from "../core/output.js";
 import { buildProbeRequest, type ProbeOptions } from "../core/request-builder.js";
 import { runProbeWizard } from "../wizard/probe-wizard.js";
@@ -100,7 +101,35 @@ export function registerProbeCommand(program: Command): void {
       }
 
       const request = buildProbeRequest(probeOpts);
-      const response = await client.generateProbe(request);
+      const probeMeta = {
+        probeMethod: probeOpts.probeMethod,
+        probeContent: probeOpts.probeContent,
+        packer: probeOpts.packer,
+        jdk: probeOpts.jdk,
+      };
+      const started = Date.now();
+      let response;
+      try {
+        response = await client.generateProbe(request);
+      } catch (err) {
+        logOp({
+          category: "probe",
+          action: "probe",
+          ok: false,
+          durationMs: Date.now() - started,
+          error: err instanceof Error ? err.message : String(err),
+          meta: probeMeta,
+        });
+        throw err;
+      }
+      logOp({
+        category: "probe",
+        action: "probe",
+        ok: true,
+        durationMs: Date.now() - started,
+        detail: `${response.probeShellResult.shellClassName} (${response.probeShellResult.shellSize} bytes)`,
+        meta: probeMeta,
+      });
 
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 
 import { createClient, type GlobalOptions, logInfo } from "../cli-context.js";
+import { logOp } from "../core/oplog.js";
 import { emitPayload } from "../core/output.js";
 import { buildMemShellRequest, type MemShellOptions } from "../core/request-builder.js";
 import { runMemShellWizard } from "../wizard/memshell-wizard.js";
@@ -139,7 +140,38 @@ export function registerGenCommand(program: Command): void {
       }
 
       const request = buildMemShellRequest(memOpts);
-      const response = await client.generateMemShell(request);
+      // safe summary for the op log — parameters only, never credentials
+      const genMeta = {
+        server: memOpts.server,
+        serverVersion: memOpts.serverVersion,
+        shellTool: memOpts.shellTool,
+        shellType: memOpts.shellType,
+        packer: memOpts.packer,
+        jdk: memOpts.jdk,
+      };
+      const started = Date.now();
+      let response;
+      try {
+        response = await client.generateMemShell(request);
+      } catch (err) {
+        logOp({
+          category: "gen",
+          action: "gen",
+          ok: false,
+          durationMs: Date.now() - started,
+          error: err instanceof Error ? err.message : String(err),
+          meta: genMeta,
+        });
+        throw err;
+      }
+      logOp({
+        category: "gen",
+        action: "gen",
+        ok: true,
+        durationMs: Date.now() - started,
+        detail: `${response.memShellResult.shellClassName} (${response.memShellResult.shellSize} bytes)`,
+        meta: genMeta,
+      });
 
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
