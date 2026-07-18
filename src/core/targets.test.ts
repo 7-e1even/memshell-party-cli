@@ -43,7 +43,7 @@ describe("target store", () => {
     saveShell("lab", "s1", shell);
 
     const projects = listProjects();
-    expect(Object.keys(projects).sort()).toEqual(["web1", "lab"]);
+    expect(Object.keys(projects).sort()).toEqual(["lab", "web1"]);
     expect(Object.keys(projects["web1"]!.shells).sort()).toEqual(["bh9060", "gdz8080"]);
   });
 
