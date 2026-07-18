@@ -1,20 +1,29 @@
 /**
- * Global operation log — every gen / probe / connect / exec / target
- * operation is appended as one JSON line, giving an auditable trail of
- * what ran, against which target, and how it ended.
+ * Global operation log — every gen / probe / connect / exec / download /
+ * upload / target operation is appended as one JSON line, giving an
+ * auditable trail of what ran, against which target, and how it ended.
  *
  * Location: ~/.memparty/operations.jsonl (override with MEMPARTY_OPLOG).
  * Logging is best-effort: a broken log file/dir must never break the
  * operation being logged.
  *
- * Secrets are never logged: no pass/key/headerValue, no payload bytes.
- * Exec output is truncated (see OUTPUT_LIMIT).
+ * Secrets are never logged: no pass/key/headerValue, no payload bytes,
+ * no file contents. Exec output is truncated (see OUTPUT_LIMIT).
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type OpCategory = "gen" | "probe" | "connect" | "exec" | "save" | "note" | "remove";
+export type OpCategory =
+  | "gen"
+  | "probe"
+  | "connect"
+  | "exec"
+  | "download"
+  | "upload"
+  | "save"
+  | "note"
+  | "remove";
 
 export interface OpLogEntry {
   /** ISO timestamp. */

@@ -26,6 +26,27 @@ export interface ExecResult {
   durationMs: number;
 }
 
+export interface TransferResult {
+  ok: boolean;
+  tool: ConnectTool;
+  url: string;
+  direction: "upload" | "download";
+  /** The remote file path as requested. */
+  remotePath: string;
+  /** Bytes transferred (present on success). */
+  bytes?: number;
+  /** Extra success note (e.g. "hash verification unavailable"). */
+  detail?: string;
+  /** Human-readable failure reason. */
+  error?: string;
+  durationMs: number;
+}
+
+export interface DownloadResult extends TransferResult {
+  /** File contents (present on success). */
+  data?: Buffer;
+}
+
 export interface CommonConnectOptions {
   /**
    * MemShellParty shells are gated by a header check:

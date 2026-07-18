@@ -38,7 +38,7 @@ function readPool(cur: Cursor): PoolInfo {
     switch (tag) {
       case 1: {
         const len = cur.u2(off + 1);
-        const value = buf.toString("utf8", off + 3, off + 3 + len);
+        const value = decodeModifiedUtf8(buf, off + 3, off + 3 + len);
         utf8.set(i, value);
         if (value === CONSTANT_VALUE) constantValueNameIndex = i;
         off += 3 + len;
@@ -76,12 +76,63 @@ function readPool(cur: Cursor): PoolInfo {
   return { count, end: off, utf8, constantValueNameIndex };
 }
 
+/**
+ * Decode a CONSTANT_Utf8 payload (modified UTF-8): 1/2/3-byte forms,
+ * surrogate code units reassemble into supplementary characters, C0 80 is
+ * U+0000. Anything else decodes to U+FFFD without aborting the walk.
+ */
+function decodeModifiedUtf8(buf: Buffer, start: number, end: number): string {
+  let out = "";
+  let i = start;
+  while (i < end) {
+    const b = buf[i]!;
+    if (b < 0x80) {
+      out += String.fromCharCode(b);
+      i += 1;
+    } else if ((b & 0xe0) === 0xc0 && i + 1 < end) {
+      out += String.fromCharCode(((b & 0x1f) << 6) | (buf[i + 1]! & 0x3f));
+      i += 2;
+    } else if ((b & 0xf0) === 0xe0 && i + 2 < end) {
+      out += String.fromCharCode(
+        ((b & 0x0f) << 12) | ((buf[i + 1]! & 0x3f) << 6) | (buf[i + 2]! & 0x3f),
+      );
+      i += 3;
+    } else {
+      out += "�";
+      i += 1;
+    }
+  }
+  return out;
+}
+
 function encodeUtf8Entry(value: string): Buffer {
-  const data = Buffer.from(value, "utf8");
+  const data = encodeModifiedUtf8(value);
   const out = Buffer.alloc(3);
   out.writeUInt8(1, 0);
   out.writeUInt16BE(data.length, 1);
   return Buffer.concat([out, data]);
+}
+
+/**
+ * The class-file CONSTANT_Utf8 format is *modified* UTF-8, not plain UTF-8:
+ * U+0000 is written as C0 80, and characters above the BMP are written as
+ * UTF-16 surrogate pairs of 3-byte sequences (plain 4-byte UTF-8 is invalid
+ * and makes the JVM reject the class). Iterating UTF-16 code units gives us
+ * exactly that encoding.
+ */
+function encodeModifiedUtf8(value: string): Buffer {
+  const bytes: number[] = [];
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code >= 0x01 && code <= 0x7f) {
+      bytes.push(code);
+    } else if (code <= 0x07ff) {
+      bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else {
+      bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    }
+  }
+  return Buffer.from(bytes);
 }
 
 /**

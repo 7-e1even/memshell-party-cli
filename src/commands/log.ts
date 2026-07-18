@@ -19,6 +19,8 @@ export function registerLogCommand(program: Command): void {
         "probe",
         "connect",
         "exec",
+        "download",
+        "upload",
         "save",
         "note",
         "remove",

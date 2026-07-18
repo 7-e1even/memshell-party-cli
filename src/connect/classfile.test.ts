@@ -23,6 +23,18 @@ describe("injectStringConstant", () => {
     expect(readStringConstant(patched2, "content")).toBe("second");
   });
 
+  it("encodes supplementary characters as modified UTF-8 (surrogate 3-byte pairs)", () => {
+    // plain 4-byte UTF-8 in a CONSTANT_Utf8 entry makes the JVM reject the
+    // class — emoji must be stored as two 3-byte surrogate sequences
+    const value = "日志-😀-文件";
+    const patched = injectStringConstant(ECHO_CLASS_BYTES, "content", value);
+    expect(readStringConstant(patched, "content")).toBe(value);
+    // 😀 = U+1F600 -> ED A0 BD ED B8 80 in modified UTF-8
+    expect(patched.includes(Buffer.from([0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80]))).toBe(true);
+    // ...and must NOT contain the plain 4-byte form F0 9F 98 80
+    expect(patched.includes(Buffer.from([0xf0, 0x9f, 0x98, 0x80]))).toBe(false);
+  });
+
   it("does not touch other fields", () => {
     const patched = injectStringConstant(ECHO_CLASS_BYTES, "content", "abc123");
     expect(readStringConstant(patched, "payloadBody")).toBeNull();

@@ -38,6 +38,7 @@
     "@inquirer/prompts": "^7.2.1",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "commander": "^12.1.0",
+    "iconv-lite": "^0.7.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {

