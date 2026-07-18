@@ -78,6 +78,22 @@ export function registerProbeCommand(program: Command): void {
     .option("--json", "print the full JSON response instead of just the payload")
     .option("-i, --interactive", "force the interactive wizard")
     .option("--no-interactive", "never launch the wizard; error on missing flags")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  $ memparty probe                                # interactive wizard
+  $ memparty probe -m ResponseBody -c Command -p DefaultBase64 \\
+      --server Tomcat --req-param-name cmd
+  $ memparty probe -m DNSLog -c Server -p DefaultBase64 --host x.dnslog.cn
+  $ memparty probe -m Sleep -c Server -p DefaultBase64 \\
+      --sleep-server Tomcat --seconds 5
+
+Note: a probe is a detection shell that reports what the target supports.
+The server name reported by '-c Server' is the value to pass as
+'memparty gen -s'.
+`,
+    )
     .action(async (opts: ProbeCmdOptions, cmd: Command) => {
       const client = createClient(cmd.optsWithGlobals());
 

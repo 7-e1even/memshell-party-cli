@@ -117,6 +117,26 @@ export function registerGenCommand(program: Command): void {
     .option("--json", "print the full JSON response instead of just the payload")
     .option("-i, --interactive", "force the interactive wizard")
     .option("--no-interactive", "never launch the wizard; error on missing flags")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  $ memparty gen                                  # interactive wizard
+  $ memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 \\
+      --godzilla-pass pass --godzilla-key key --jdk java8
+  $ memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 \\
+      --godzilla-pass pass --godzilla-key key -o shell.class
+  $ memparty gen -s Tomcat -t Command -y Filter -p DefaultBase64 \\
+      --command-param-name cmd --encryptor RAW --implementation-class RuntimeExec
+  $ memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 --json
+
+Note: run 'memparty config' to list the available servers, tools, shell
+types and packers. Some packers (e.g. Base64) are aggregate packers that
+return several variants at once — pick a leaf packer (e.g. DefaultBase64)
+for a single payload. The --json output includes the gate header
+(shellToolConfig) you need for 'memparty connect' / 'memparty exec'.
+`,
+    )
     .action(async (opts: GenCmdOptions, cmd: Command) => {
       const client = createClient(cmd.optsWithGlobals());
 
