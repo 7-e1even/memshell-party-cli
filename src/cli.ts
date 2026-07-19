@@ -13,6 +13,7 @@ import { registerMcpCommand } from "./commands/mcp.js";
 import { registerParseClassNameCommand } from "./commands/parse-classname.js";
 import { registerProbeCommand } from "./commands/probe.js";
 import { registerProfileCommand } from "./commands/profile.js";
+import { registerSkillCommand } from "./commands/skill.js";
 import { registerTargetCommand } from "./commands/target.js";
 import { registerDownloadCommand, registerUploadCommand } from "./commands/transfer.js";
 import { registerVersionCommand } from "./commands/version.js";
@@ -45,6 +46,12 @@ Quick start:
   $ memparty list                                  # saved targets
   $ memparty log                                   # recent operations
 
+Site-mimicking (mimic) flow:
+  $ memparty skill install                         # teach your agent this workflow
+  $ memparty profile init acme --site http://192.0.2.1:8080   # then write the profile
+  $ memparty custom build --profile acme --server Tomcat      # -> injectable payload
+  $ memparty demo                                  # local end-to-end walkthrough
+
 Every subcommand has its own examples: memparty <command> --help
 `,
     );
@@ -60,6 +67,7 @@ Every subcommand has its own examples: memparty <command> --help
   registerLogCommand(program);
   registerParseClassNameCommand(program);
   registerProfileCommand(program);
+  registerSkillCommand(program);
   registerCustomCommand(program);
   registerDemoCommand(program);
   registerVersionCommand(program);

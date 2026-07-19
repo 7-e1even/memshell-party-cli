@@ -62,6 +62,15 @@ export {
 export { renderCryptoProbe, renderFilterJava, type FilterTemplateOptions } from "./custom/java-template.js";
 export { hasJavac } from "./custom/javac.js";
 export {
+  installSkill,
+  skillSourceDir,
+  skillTargetDir,
+  SKILL_NAME,
+  type InstallSkillOptions,
+  type SkillInstallResult,
+  type SkillScope,
+} from "./core/skill-install.js";
+export {
   testSuo5,
   marshalSuo5Map,
   unmarshalSuo5Map,
