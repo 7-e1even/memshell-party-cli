@@ -3,8 +3,12 @@ import { writeFileSync } from "node:fs";
 import { Command, Option } from "commander";
 
 import { logInfo, reportError, type GlobalOptions } from "../cli-context.js";
-import { downloadBehinder, uploadBehinder } from "../connect/behinder.js";
-import { downloadGodzilla, uploadGodzilla } from "../connect/godzilla.js";
+import {
+  protocolNames,
+  requireProtocol,
+  unsupportedMessage,
+  type ProtocolOptions,
+} from "../connect/registry.js";
 import type {
   CommonConnectOptions,
   DownloadResult,
@@ -123,17 +127,17 @@ function printResult(
 export function registerDownloadCommand(program: Command): void {
   program
     .command("download")
-    .description("Download a file from a deployed webshell (Godzilla / Behinder)")
+    .description("Download a file from a deployed webshell")
     .argument("[name]", "saved target name (see 'memparty list')")
     .argument("[remote]", "remote file path")
     .option("-u, --url <url>", "URL of the deployed shell (or give a saved target name)")
     .addOption(
-      new Option("-t, --tool <tool>", "shell tool").choices(["godzilla", "behinder"]),
+      new Option("-t, --tool <tool>", "shell protocol").choices(protocolNames("download")),
     )
     .option("-o, --output <file>", "local destination (a directory keeps the remote basename)")
     .option("--force", "overwrite an existing local file")
     .option("--pass <pass>", "password (godzilla default: pass; behinder default: rebeyond)")
-    .option("--key <key>", "godzilla key", "key")
+    .option("--key <key>", "godzilla key (default: key)")
     .option(
       "--remote-charset <label>",
       "godzilla: charset for non-ASCII remote paths (e.g. GBK; default UTF-8)",
@@ -196,25 +200,19 @@ is never overwritten unless --force is given.
       }
 
       let result: DownloadResult;
-      switch (conn.tool) {
-        case "godzilla":
-          result = await downloadGodzilla(
-            conn.url,
-            conn.pass ?? "pass",
-            conn.key ?? "key",
-            remotePath,
-            { ...common, remoteCharset: opts.remoteCharset },
-          );
-          break;
-        case "behinder":
-          result = await downloadBehinder(conn.url, conn.pass ?? "rebeyond", remotePath, common);
-          break;
-        default:
-          process.stderr.write(
-            `Error: download supports godzilla | behinder (got ${String(conn.tool)})\n`,
-          );
+      try {
+        const protocol = requireProtocol(conn.tool);
+        if (!protocol.download) {
+          reportError(unsupportedMessage(protocol, "download"), opts.json ? ["--json"] : []);
           process.exitCode = 1;
           return;
+        }
+        const options: ProtocolOptions = { remoteCharset: opts.remoteCharset };
+        result = await protocol.download({ conn, common, options }, remotePath);
+      } catch (err) {
+        reportError(err instanceof Error ? err.message : String(err), opts.json ? ["--json"] : []);
+        process.exitCode = 1;
+        return;
       }
 
       let writeError: string | undefined;
@@ -251,16 +249,16 @@ is never overwritten unless --force is given.
 export function registerUploadCommand(program: Command): void {
   program
     .command("upload")
-    .description("Upload a local file to a deployed webshell (Godzilla / Behinder)")
+    .description("Upload a local file to a deployed webshell")
     .argument("[name]", "saved target name (see 'memparty list')")
     .argument("[local]", "local file path")
     .argument("[remote]", "remote destination path")
     .option("-u, --url <url>", "URL of the deployed shell (or give a saved target name)")
     .addOption(
-      new Option("-t, --tool <tool>", "shell tool").choices(["godzilla", "behinder"]),
+      new Option("-t, --tool <tool>", "shell protocol").choices(protocolNames("upload")),
     )
     .option("--pass <pass>", "password (godzilla default: pass; behinder default: rebeyond)")
-    .option("--key <key>", "godzilla key", "key")
+    .option("--key <key>", "godzilla key (default: key)")
     .option(
       "--remote-charset <label>",
       "godzilla: charset for non-ASCII remote paths (e.g. GBK; default UTF-8)",
@@ -324,26 +322,19 @@ chunk aborts the transfer — the remote file may be left partial.
       }
 
       let result: TransferResult;
-      switch (conn.tool) {
-        case "godzilla":
-          result = await uploadGodzilla(
-            conn.url,
-            conn.pass ?? "pass",
-            conn.key ?? "key",
-            remotePath,
-            data,
-            { ...common, remoteCharset: opts.remoteCharset },
-          );
-          break;
-        case "behinder":
-          result = await uploadBehinder(conn.url, conn.pass ?? "rebeyond", remotePath, data, common);
-          break;
-        default:
-          process.stderr.write(
-            `Error: upload supports godzilla | behinder (got ${String(conn.tool)})\n`,
-          );
+      try {
+        const protocol = requireProtocol(conn.tool);
+        if (!protocol.upload) {
+          reportError(unsupportedMessage(protocol, "upload"), opts.json ? ["--json"] : []);
           process.exitCode = 1;
           return;
+        }
+        const options: ProtocolOptions = { remoteCharset: opts.remoteCharset };
+        result = await protocol.upload({ conn, common, options }, remotePath, data);
+      } catch (err) {
+        reportError(err instanceof Error ? err.message : String(err), opts.json ? ["--json"] : []);
+        process.exitCode = 1;
+        return;
       }
 
       const savedAs = result.ok ? maybeAutoSave(conn, opts) : undefined;

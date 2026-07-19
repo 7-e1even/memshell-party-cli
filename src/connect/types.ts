@@ -1,6 +1,11 @@
 /** Shared types for the shell connection testers. */
 
-export type ConnectTool = "behinder" | "godzilla" | "suo5";
+/**
+ * Shell protocol name. Used to be a hardcoded union of the built-in tools;
+ * now a free string — `src/connect/registry.ts` is the source of truth for
+ * which protocols actually exist (built-ins + plugins like "mimic").
+ */
+export type ConnectTool = string;
 
 export interface ConnectTestResult {
   ok: boolean;

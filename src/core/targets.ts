@@ -25,6 +25,8 @@ export interface StoredShell {
   headerValue?: string;
   extraHeaders?: Record<string, string>;
   insecure?: boolean;
+  /** mimic protocol: site profile name (see 'memparty profile'). */
+  profile?: string;
   /** Free-form note for this shell (e.g. "DMZ 跳板机"). */
   remark?: string;
   createdAt: string;
@@ -179,6 +181,7 @@ export interface ConnectionFlags {
   headerValue?: string;
   extraHeaders?: Record<string, string>;
   insecure?: boolean;
+  profile?: string;
 }
 
 export interface ResolvedConnection {
@@ -190,6 +193,8 @@ export interface ResolvedConnection {
   headerValue?: string;
   extraHeaders: Record<string, string>;
   insecure?: boolean;
+  /** mimic protocol: site profile name. */
+  profile?: string;
   /** Canonical `project/shell` reference, when resolved from the store. */
   targetName?: string;
 }
@@ -236,6 +241,7 @@ export function autoSaveShell(conn: ResolvedConnection): string {
     headerValue: conn.headerValue,
     extraHeaders: Object.keys(conn.extraHeaders).length > 0 ? conn.extraHeaders : undefined,
     insecure: conn.insecure,
+    profile: conn.profile,
   });
   return `${projectName}/${shellName}`;
 }
@@ -291,7 +297,7 @@ export function resolveConnection(
     throw new Error("no URL — pass --url or a saved target name");
   }
   if (!tool) {
-    throw new Error("--tool is required (godzilla | behinder | suo5)");
+    throw new Error("--tool is required — see the command's --help for available protocols");
   }
   return {
     url,
@@ -302,6 +308,7 @@ export function resolveConnection(
     headerValue: flags.headerValue ?? stored?.headerValue,
     extraHeaders: { ...stored?.extraHeaders, ...flags.extraHeaders },
     insecure: flags.insecure ?? stored?.insecure,
+    profile: flags.profile ?? stored?.profile,
     targetName,
   };
 }

@@ -4,12 +4,15 @@ import { ApiError } from "./api/client.js";
 import { reportError } from "./cli-context.js";
 import { registerConfigCommand } from "./commands/config.js";
 import { registerConnectCommand } from "./commands/connect.js";
+import { registerCustomCommand } from "./commands/custom.js";
+import { registerDemoCommand } from "./commands/demo.js";
 import { registerExecCommand } from "./commands/exec.js";
 import { registerGenCommand } from "./commands/gen.js";
 import { registerLogCommand } from "./commands/log.js";
 import { registerMcpCommand } from "./commands/mcp.js";
 import { registerParseClassNameCommand } from "./commands/parse-classname.js";
 import { registerProbeCommand } from "./commands/probe.js";
+import { registerProfileCommand } from "./commands/profile.js";
 import { registerTargetCommand } from "./commands/target.js";
 import { registerDownloadCommand, registerUploadCommand } from "./commands/transfer.js";
 import { registerVersionCommand } from "./commands/version.js";
@@ -56,6 +59,9 @@ Every subcommand has its own examples: memparty <command> --help
   registerTargetCommand(program);
   registerLogCommand(program);
   registerParseClassNameCommand(program);
+  registerProfileCommand(program);
+  registerCustomCommand(program);
+  registerDemoCommand(program);
   registerVersionCommand(program);
   registerMcpCommand(program);
 

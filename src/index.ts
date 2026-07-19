@@ -45,6 +45,23 @@ export {
 export { execBehinder, testBehinder, type BehinderConnectOptions } from "./connect/behinder.js";
 export { execGodzilla, testGodzilla, type GodzillaExecOptions } from "./connect/godzilla.js";
 export {
+  LEGACY_CIPHER,
+  deriveMarkers,
+  resolveCipher,
+  type MimicCipher,
+} from "./connect/mimic-codecs.js";
+export {
+  buildCustomMemshell,
+  defaultClassName,
+  profileSecretFields,
+  type BuildDeps,
+  type CustomBuildInput,
+  type CustomBuildResult,
+  type GenerateClient,
+} from "./custom/build.js";
+export { renderCryptoProbe, renderFilterJava, type FilterTemplateOptions } from "./custom/java-template.js";
+export { hasJavac } from "./custom/javac.js";
+export {
   testSuo5,
   marshalSuo5Map,
   unmarshalSuo5Map,

@@ -1,9 +1,7 @@
 import { Command, Option } from "commander";
 
 import { logInfo, reportError, type GlobalOptions } from "../cli-context.js";
-import { testBehinder } from "../connect/behinder.js";
-import { testGodzilla } from "../connect/godzilla.js";
-import { testSuo5, type Suo5Mode } from "../connect/suo5.js";
+import { protocolNames, requireProtocol, type ProtocolOptions } from "../connect/registry.js";
 import type { CommonConnectOptions, ConnectTestResult } from "../connect/types.js";
 import { logOp } from "../core/oplog.js";
 import { autoSaveShell, resolveConnection } from "../core/targets.js";
@@ -16,7 +14,9 @@ interface ConnectCmdOptions extends GlobalOptions {
   headerName?: string;
   headerValue?: string;
   header?: string[];
-  suo5Mode?: Suo5Mode;
+  suo5Mode?: ProtocolOptions["suo5Mode"];
+  profile?: string;
+  dynamicPath?: boolean;
   insecure?: boolean;
   json?: boolean;
   save?: boolean;
@@ -38,15 +38,13 @@ export function registerConnectCommand(program: Command): void {
   program
     .command("connect")
     .description(
-      "Test whether a deployed webshell (Godzilla / Behinder / suo5) is alive and the credentials work",
+      "Test whether a deployed webshell is alive and the credentials work",
     )
     .argument("[name]", "saved target name (see 'memparty list')")
     .option("-u, --url <url>", "URL of the deployed shell (or give a saved target name)")
-    .addOption(
-      new Option("-t, --tool <tool>", "shell tool").choices(["godzilla", "behinder", "suo5"]),
-    )
+    .addOption(new Option("-t, --tool <tool>", "shell protocol").choices(protocolNames()))
     .option("--pass <pass>", "password (godzilla default: pass; behinder default: rebeyond)")
-    .option("--key <key>", "godzilla key", "key")
+    .option("--key <key>", "godzilla/mimic key (default: key)")
     .option(
       "--header-name <name>",
       "gate header name reported by gen (shellToolConfig.headerName)",
@@ -61,6 +59,8 @@ export function registerConnectCommand(program: Command): void {
         .choices(["auto", "v2", "v1"])
         .default("auto"),
     )
+    .option("--profile <name>", "mimic: site profile name (see 'memparty profile')")
+    .option("--dynamic-path", "mimic: randomize the request path from the site profile")
     .option("-k, --insecure", "skip TLS certificate verification")
     .option("--json", "output raw JSON")
     .option("--no-save", "do not auto-save the target after a successful test")
@@ -73,6 +73,8 @@ Examples:
   $ memparty connect -u http://target/shell.jsp -t behinder --pass rebeyond \\
       --header-value my-secret-token
   $ memparty connect -u http://target/suo5.jsp -t suo5
+  $ memparty connect -u http://target/ -t mimic --pass pass --key key \\
+      --profile target-site --dynamic-path
   $ memparty connect web222                       # saved target, see 'memparty list'
   $ memparty connect -u https://target/shell.jsp -t godzilla -k --json
 
@@ -99,6 +101,7 @@ A successful test auto-saves the profile as <host>/<tool> (skip with
           headerValue: opts.headerValue,
           extraHeaders: parseExtraHeaders(opts.header),
           insecure: opts.insecure,
+          profile: opts.profile,
         });
       } catch (err) {
         reportError(err instanceof Error ? err.message : String(err), opts.json ? ["--json"] : []);
@@ -115,20 +118,18 @@ A successful test auto-saves the profile as <host>/<tool> (skip with
       };
 
       let result: ConnectTestResult;
-      switch (conn.tool) {
-        case "godzilla":
-          result = await testGodzilla(conn.url, conn.pass ?? "pass", conn.key ?? "key", common);
-          break;
-        case "behinder":
-          result = await testBehinder(conn.url, conn.pass ?? "rebeyond", common);
-          break;
-        case "suo5":
-          result = await testSuo5(conn.url, { ...common, mode: opts.suo5Mode });
-          break;
-        default:
-          process.stderr.write(`Error: unknown tool ${String(conn.tool)}\n`);
-          process.exitCode = 1;
-          return;
+      try {
+        const protocol = requireProtocol(conn.tool);
+        const options: ProtocolOptions = {
+          suo5Mode: opts.suo5Mode,
+          profile: conn.profile,
+          dynamicPath: opts.dynamicPath,
+        };
+        result = await protocol.test({ conn, common, options });
+      } catch (err) {
+        reportError(err instanceof Error ? err.message : String(err), opts.json ? ["--json"] : []);
+        process.exitCode = 1;
+        return;
       }
 
       // a successful handshake proves the credentials — keep them as a named target

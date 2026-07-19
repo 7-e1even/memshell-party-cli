@@ -51,15 +51,30 @@ export function postRaw(
     return Promise.reject(new HttpRequestError(`unsupported protocol: ${target.protocol}`, url));
   }
 
+  // Opt-in proxying for traffic inspection (Burp & co.): set MEMPARTY_PROXY
+  // e.g. http://127.0.0.1:8083. Deliberately NOT HTTP_PROXY — shell traffic
+  // must never leak into a system-wide proxy by accident. http:// targets
+  // only (absolute-URI request line); https:// still goes direct.
+  let proxy: URL | null = null;
+  if (!isHttps && process.env.MEMPARTY_PROXY) {
+    try {
+      proxy = new URL(process.env.MEMPARTY_PROXY);
+    } catch {
+      return Promise.reject(
+        new HttpRequestError(`invalid MEMPARTY_PROXY: ${process.env.MEMPARTY_PROXY}`, url),
+      );
+    }
+  }
+
   return new Promise<RawPostResult>((resolve, reject) => {
     const started = Date.now();
     const transport = isHttps ? https : http;
     const req = transport.request(
       {
         method: "POST",
-        hostname: target.hostname,
-        port: target.port || (isHttps ? 443 : 80),
-        path: `${target.pathname}${target.search}`,
+        hostname: proxy ? proxy.hostname : target.hostname,
+        port: proxy ? proxy.port || 8080 : target.port || (isHttps ? 443 : 80),
+        path: proxy ? target.toString() : `${target.pathname}${target.search}`,
         // agent:false — never reuse a pooled socket. A shell server may close
         // the connection right after an empty response, and reusing such a
         // socket surfaces as a spurious ECONNRESET on the next probe.
