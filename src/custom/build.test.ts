@@ -45,10 +45,13 @@ function fakeClient(captured: { req?: MemShellGenerateRequest }): GenerateClient
   };
 }
 
-/** Stub javac: drop a fake .class next to the .java source. */
+/** Stub javac: drop a fake .class next to the .java source (plus the wrapper's stream class). */
 function stubCompile(sources: string[]): void {
   for (const src of sources) {
     writeFileSync(src.replace(/\.java$/, ".class"), Buffer.from("CAFEBABE-fake-class"));
+    if (src.endsWith("CachedBody.java")) {
+      writeFileSync(src.replace(/\.java$/, "$Stream.class"), Buffer.from("CAFEBABE-fake-stream"));
+    }
   }
 }
 

@@ -7,9 +7,12 @@
  * practice the agent reads the site itself and hand-writes this JSON.
  * This module is only the store + schema:
  *
- *   - templates: one or more real pages (HTML verbatim) used as response
- *                skins — the server rotates among them so responses don't
- *                all share one page's length/hash;
+ *   - templates: one or more real response bodies (HTML/JSON/XML/JS…)
+ *                used as response skins — the server rotates among them so
+ *                responses don't all share one page's length/hash. A
+ *                template carrying `{{payload}}` gets the ciphertext
+ *                substituted exactly there (any format); an HTML template
+ *                without it gets the marker fragment injected;
  *   - paths:     the site's path vocabulary, e.g. ["/api/", "/news/"],
  *                used for --dynamic-path request randomization.
  *
@@ -26,9 +29,15 @@ import { join } from "node:path";
 export interface ProfileTemplate {
   /** <title> of this page (metadata — the template is used verbatim). */
   title: string;
-  /** Full HTML of a real page on the site (a response skin). */
+  /**
+   * Full body of a real response on the site (a response skin). Any text
+   * format is allowed — HTML, JSON, XML, JS… When it contains the literal
+   * placeholder `{{payload}}`, the ciphertext is substituted exactly there
+   * (works for every format); without a placeholder the template must be an
+   * HTML page and the cipher's marker fragment is injected before </body>.
+   */
   template: string;
-  /** Content-Type this page is served with. */
+  /** Content-Type this page is served with (the shell answers with it). */
   contentType: string;
   /** Relative rotation weight (default 1). */
   weight?: number;
@@ -54,10 +63,41 @@ export interface ProfileRequest {
   secretField: string;
   /** Where the ciphertext goes: form body (default), URL query, or a header. */
   secretIn?: "body" | "query" | "header";
+  /**
+   * Body serialization when secretIn=body: "form" (default, url-encoded) or
+   * "json" (a JSON object with Content-Type application/json — for API sites
+   * whose dominant traffic is JSON XHR). Ignored when bodyTemplate is set.
+   */
+  bodyStyle?: "form" | "json";
+  /**
+   * Full request body with the literal placeholder `{{payload}}` where the
+   * ciphertext goes (takes precedence over bodyStyle; secretIn must be body).
+   * Any text format — an OpenAI-style chat JSON, a GraphQL envelope, an XML
+   * SOAP message, a multipart/form-data body (pair it with a Content-Type
+   * header carrying the same boundary). Decoy macros {{hex:N}}, {{b64:N}},
+   * {{uuid}}, {{ts}}, {{int:A:B}} are rendered per request.
+   */
+  bodyTemplate?: string;
   /** Decoy fields sent alongside (e.g. csrftoken/j_username/agreement). */
   fields?: ProfileFormField[];
+  /** Extra/override request headers for this shape (e.g. Accept). */
+  headers?: Record<string, string>;
   /** Relative rotation weight (default 1) when `request` is an array. */
   weight?: number;
+}
+
+/**
+ * Infer the Content-Type a bodyTemplate implies when the shape doesn't set
+ * one explicitly in headers. The client sends this CT and the custom build
+ * derives the filter's body-read allowlist from the same inference — the
+ * two sides must agree, hence one shared helper.
+ */
+export function inferBodyTemplateContentType(bodyTemplate: string): string | null {
+  const t = bodyTemplate.trimStart();
+  if (t.startsWith("--")) return "multipart/form-data";
+  if (t.startsWith("{") || t.startsWith("[")) return "application/json";
+  if (t.startsWith("<")) return "text/xml";
+  return null;
 }
 
 /**
@@ -139,6 +179,9 @@ export function pickRequestShape(requests: ProfileRequest[]): ProfileRequest | u
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** Where the ciphertext goes inside a cover template (any text format). */
+export const PAYLOAD_PLACEHOLDER = "{{payload}}";
+
 export function profilesDir(): string {
   const override = process.env.MEMPARTY_PROFILES;
   return override ? override : join(homedir(), ".memparty", "profiles");
@@ -163,8 +206,12 @@ export function validateProfile(profile: SiteProfile): void {
     throw new Error("profile needs at least one template (templates[] or legacy template)");
   }
   templates.forEach((t, i) => {
-    if (!t.template || !/<!doctype\s+html|<html|<head/i.test(t.template)) {
-      throw new Error(`templates[${i}].template must be a full HTML page`);
+    // a {{payload}} placeholder makes any text format usable; without it the
+    // template must be an HTML page (the marker fragment needs </body>)
+    if (!t.template || (!t.template.includes(PAYLOAD_PLACEHOLDER) && !/<!doctype\s+html|<html|<head/i.test(t.template))) {
+      throw new Error(
+        `templates[${i}].template must be a full HTML page, or carry the ${PAYLOAD_PLACEHOLDER} placeholder (any text format)`,
+      );
     }
     if (!t.contentType) {
       throw new Error(`templates[${i}].contentType is required (e.g. "text/html; charset=utf-8")`);
@@ -179,6 +226,24 @@ export function validateProfile(profile: SiteProfile): void {
     }
     if (req.secretIn !== undefined && !["body", "query", "header"].includes(req.secretIn)) {
       throw new Error(`request[${ri}].secretIn must be body | query | header`);
+    }
+    if (req.bodyStyle !== undefined && !["form", "json"].includes(req.bodyStyle)) {
+      throw new Error(`request[${ri}].bodyStyle must be form | json`);
+    }
+    if (req.bodyTemplate !== undefined) {
+      if (!req.bodyTemplate.includes(PAYLOAD_PLACEHOLDER)) {
+        throw new Error(`request[${ri}].bodyTemplate must carry the ${PAYLOAD_PLACEHOLDER} placeholder`);
+      }
+      if (req.secretIn !== undefined && req.secretIn !== "body") {
+        throw new Error(`request[${ri}].bodyTemplate only applies to secretIn=body`);
+      }
+    }
+    if (req.headers !== undefined) {
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v !== "string" || !k) {
+          throw new Error(`request[${ri}].headers must be a string map`);
+        }
+      }
     }
     for (const [i, f] of (req.fields ?? []).entries()) {
       if (!f.name || !/^[A-Za-z0-9_.-]+$/.test(f.name)) {

