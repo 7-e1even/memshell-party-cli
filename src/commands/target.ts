@@ -1,5 +1,6 @@
 import { Command, Option } from "commander";
 
+import { protocolNames } from "../connect/registry.js";
 import {
   getProject,
   listProjects,
@@ -21,6 +22,7 @@ interface TargetSaveOptions {
   headerName?: string;
   headerValue?: string;
   header?: string[];
+  profile?: string;
   insecure?: boolean;
   remark?: string;
   category?: string;
@@ -82,13 +84,14 @@ export function registerTargetCommand(program: Command): void {
     .argument("<ref>", "shell reference: <project>/<shell>")
     .requiredOption("-u, --url <url>", "URL of the deployed shell")
     .addOption(
-      new Option("-t, --tool <tool>", "shell tool").choices(["godzilla", "behinder", "suo5"]),
+      new Option("-t, --tool <tool>", "shell tool").choices(protocolNames()),
     )
     .option("--pass <pass>", "password")
-    .option("--key <key>", "godzilla key")
+    .option("--key <key>", "godzilla / mimic key")
     .option("--header-name <name>", "gate header name (shellToolConfig.headerName)")
     .option("--header-value <value>", "gate header value (shellToolConfig.headerValue)")
     .option("-H, --header <line...>", 'extra request header, e.g. -H "Cookie: a=b"')
+    .option("--profile <name>", "mimic: site profile name")
     .option("-k, --insecure", "skip TLS certificate verification")
     .option("--remark <text>", "project remark (merged into the project)")
     .option("--category <name>", "project category (merged into the project)")
@@ -101,6 +104,7 @@ Examples:
   $ memparty save web1/bh9060 -u http://192.0.2.10:9060/console/service \\
       -t behinder --pass rebeyond --header-name User-Agent --header-value my-secret-token \\
       --remark "内网测试环境" --category test
+  $ memparty save lab/mimic1 -u http://192.0.2.1/mimic -t mimic --profile acme
   $ memparty list                            # show saved targets
   $ memparty exec web1/bh9060 --cmd "whoami"
 
@@ -118,7 +122,9 @@ save is for choosing the name by hand.
         return;
       }
       if (!opts.tool) {
-        process.stderr.write("Error: --tool is required (godzilla | behinder | suo5)\n");
+        process.stderr.write(
+          `Error: --tool is required (available: ${protocolNames().join(", ")})\n`,
+        );
         process.exitCode = 1;
         return;
       }
@@ -133,6 +139,7 @@ save is for choosing the name by hand.
         headerName: opts.headerName,
         headerValue: opts.headerValue,
         extraHeaders: parseExtraHeaders(opts.header),
+        profile: opts.profile,
         insecure: opts.insecure || undefined,
         remark: opts.shellRemark,
       };

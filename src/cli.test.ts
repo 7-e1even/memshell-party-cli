@@ -91,6 +91,38 @@ describe("cli subprocess", () => {
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual({});
   });
+
+  it("save accepts any registered protocol including mimic", () => {
+    const r = run([
+      "save",
+      "lab/mimic1",
+      "-u",
+      "http://192.0.2.1/mimic",
+      "-t",
+      "mimic",
+      "--profile",
+      "demo",
+      "--json",
+    ]);
+    expect(r.status).toBe(0);
+    const doc = JSON.parse(r.stdout) as { tool: string; profile?: string };
+    expect(doc.tool).toBe("mimic");
+    expect(doc.profile).toBe("demo");
+  });
+
+  it("save rejects an unknown tool", () => {
+    const r = run([
+      "save",
+      "lab/bad",
+      "-u",
+      "http://192.0.2.1/bad",
+      "-t",
+      "not-a-protocol",
+      "--json",
+    ]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/not-a-protocol.*invalid|Allowed choices/);
+  });
 });
 
 describe("repl", () => {
