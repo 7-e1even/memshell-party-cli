@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { emitPayload, shouldDecode } from "./output.js";
+import { emitPayload, emitSinglePackResult, hasMultiplePackResults, shouldDecode } from "./output.js";
 
 describe("shouldDecode", () => {
   it("honours an explicit decode flag", () => {
@@ -54,5 +54,39 @@ describe("emitPayload", () => {
     const writeFile = vi.fn();
     emitPayload("not-base64", { outFile: "shell.jar", decode: false }, { writeFile });
     expect(writeFile).toHaveBeenCalledWith("shell.jar", "not-base64");
+  });
+});
+
+describe("hasMultiplePackResults", () => {
+  it("is true only when allPackResults is a non-empty object", () => {
+    expect(hasMultiplePackResults({ allPackResults: { A: "x", B: "y" } })).toBe(true);
+    expect(hasMultiplePackResults({ allPackResults: {} })).toBe(false);
+    expect(hasMultiplePackResults({ allPackResults: null })).toBe(false);
+    expect(hasMultiplePackResults({})).toBe(false);
+  });
+});
+
+describe("emitSinglePackResult", () => {
+  it("writes the single packResult, decoding for binary extensions", () => {
+    const writeFile = vi.fn();
+    const original = Buffer.from("class-bytes");
+    const result = emitSinglePackResult(
+      { packResult: original.toString("base64") },
+      { outFile: "shell.class" },
+      { writeFile },
+    );
+    const written = writeFile.mock.calls[0]![1] as Buffer;
+    expect(written.equals(original)).toBe(true);
+    expect(result.decoded).toBe(true);
+  });
+
+  it("refuses aggregate packer results with a leaf-packer hint", () => {
+    expect(() =>
+      emitSinglePackResult({ allPackResults: { A: "x", B: "y" } }, { outFile: "x.class" }),
+    ).toThrow(/2 variants.*leaf packer/s);
+  });
+
+  it("throws when the server returned no packResult", () => {
+    expect(() => emitSinglePackResult({}, {})).toThrow(/no packResult/);
   });
 });

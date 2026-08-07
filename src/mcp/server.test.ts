@@ -431,3 +431,122 @@ describe("MCP connect_test tool", () => {
     });
   });
 });
+
+
+/** Mock for the MemShellParty generate API (single + aggregate packer answers). */
+const FAKE_CLASS = Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0x00, 0x00, 0x00, 0x34]);
+
+function startGenerateApiMock(): Promise<Server> {
+  const memShellResult = {
+    shellClassName: "org.example.Shell",
+    shellSize: 1234,
+    shellBytesBase64Str: FAKE_CLASS.toString("base64"),
+    injectorClassName: "org.example.Injector",
+    injectorSize: FAKE_CLASS.length,
+    injectorBytesBase64Str: FAKE_CLASS.toString("base64"),
+    shellConfig: { server: "Tomcat", shellTool: "Godzilla", shellType: "Listener" },
+    shellToolConfig: { godzillaPass: "pass", godzillaKey: "key" },
+    injectorConfig: {},
+  };
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      if (req.method === "POST" && req.url === "/api/memshell/generate") {
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as { packer: string };
+        const payload =
+          body.packer === "Base64"
+            ? {
+                memShellResult,
+                allPackResults: {
+                  DefaultBase64: FAKE_CLASS.toString("base64"),
+                  GzipBase64: FAKE_CLASS.toString("base64"),
+                },
+              }
+            : { memShellResult, packResult: FAKE_CLASS.toString("base64") };
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(payload));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
+}
+
+describe("MCP generate_memshell tool", () => {
+  let apiServer: Server;
+  let mcpClient: Client;
+  let tmpDir: string;
+
+  const GEN_ARGS = {
+    server: "Tomcat",
+    shellTool: "Godzilla",
+    shellType: "Listener",
+    godzillaPass: "pass",
+    godzillaKey: "key",
+  };
+
+  beforeAll(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "memparty-mcp-gen-"));
+    process.env.MEMPARTY_OPLOG = join(tmpDir, "operations.jsonl");
+    process.env.MEMPARTY_TARGETS = join(tmpDir, "targets.json");
+
+    apiServer = await startGenerateApiMock();
+    const base = `http://127.0.0.1:${(apiServer.address() as AddressInfo).port}`;
+
+    const mcpServer = createMcpServer(new MemPartyClient({ baseUrl: base }));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    mcpClient = new Client({ name: "test-client", version: "0.0.0" });
+    await Promise.all([mcpClient.connect(clientTransport), mcpServer.connect(serverTransport)]);
+  });
+
+  afterAll(async () => {
+    await mcpClient.close();
+    await new Promise((resolve) => apiServer.close(resolve));
+    delete process.env.MEMPARTY_OPLOG;
+    delete process.env.MEMPARTY_TARGETS;
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("exposes outputFile in the input schema", async () => {
+    const { tools } = await mcpClient.listTools();
+    const tool = tools.find((t) => t.name === "generate_memshell");
+    const props = (tool!.inputSchema as { properties: Record<string, unknown> }).properties;
+    expect(Object.keys(props)).toContain("outputFile");
+  });
+
+  it("writes the decoded payload to outputFile and returns the write result", async () => {
+    const outFile = join(tmpDir, "mcp-shell.class");
+    const result = (await mcpClient.callTool({
+      name: "generate_memshell",
+      arguments: { ...GEN_ARGS, packer: "DefaultBase64", outputFile: outFile },
+    })) as ToolResult;
+    expect(result.isError).toBeFalsy();
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.packResult).toBe(FAKE_CLASS.toString("base64"));
+    expect(payload.outputFile.destination).toBe(outFile);
+    expect(payload.outputFile.decoded).toBe(true);
+    expect(payload.outputFile.size).toBe(FAKE_CLASS.length);
+    expect(readFileSync(outFile).equals(FAKE_CLASS)).toBe(true);
+  });
+
+  it("omits the outputFile field when no outputFile was requested", async () => {
+    const result = (await mcpClient.callTool({
+      name: "generate_memshell",
+      arguments: { ...GEN_ARGS, packer: "DefaultBase64" },
+    })) as ToolResult;
+    expect(result.isError).toBeFalsy();
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.packResult).toBeDefined();
+    expect(payload.outputFile).toBeUndefined();
+  });
+
+  it("returns a clear error for an aggregate packer + outputFile", async () => {
+    const result = (await mcpClient.callTool({
+      name: "generate_memshell",
+      arguments: { ...GEN_ARGS, packer: "Base64", outputFile: join(tmpDir, "agg.class") },
+    })) as ToolResult;
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/leaf packer/);
+  });
+});

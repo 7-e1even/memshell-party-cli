@@ -142,6 +142,13 @@ Output:
 - payload → **stdout** by default.
 - `-o shell.class` / `-o shell.jar` → auto base64-decodes and writes binary.
 - `--json` → full response (class names, sizes, base64 bytes, config echo) for downstream tooling.
+- `-o` + `--json` together → the file is still written and the JSON gains an
+  `outputFile: {destination, size, decoded}` field — the recommended combo for agents
+  (metadata via JSON, payload on disk).
+- `-o` refuses aggregate packers (several variants in `allPackResults`) with an error
+  telling you to pick a leaf packer.
+- MCP: `generate_memshell` / `generate_probe` accept an `outputFile` arg with the same
+  behavior (auto-decode by extension, write result echoed back as `outputFile`).
 
 ## Step 4 — Verify the shell is alive
 
@@ -470,6 +477,7 @@ actions before repeating them, or to answer "what did we run on this host?".
   `--injector-class-name` for these.
 - **Shrink is on by default** (smaller bytecode). Use `--no-shrink` only if a stripped payload misbehaves.
 - **Aggregate packers** return multiple variants — pick a leaf for a single payload (see Step 1).
+  `-o`/`outputFile` refuses them outright (error tells you to pick a leaf packer).
 - **Agent memshells** (`Agent*` types) require the `AgentJar*` packer family and a JVM attach; they
   aren't class-byte payloads.
 - **Backend override.** Default is the public `https://party.mem.mk` (good for trying things, but

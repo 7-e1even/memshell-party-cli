@@ -25,6 +25,7 @@ import type {
 } from "../connect/types.js";
 import { readUploadFile, resolveDownloadPath } from "../core/localfile.js";
 import { logOp, opLogPath, readOps, truncateOutput, type OpCategory } from "../core/oplog.js";
+import { emitSinglePackResult } from "../core/output.js";
 import {
   autoSaveShell,
   listProjects,
@@ -78,6 +79,15 @@ const memShellInput = {
   urlPattern: z.string().optional(),
   injectorClassName: z.string().optional(),
   staticInitialize: z.boolean().optional(),
+  outputFile: z
+    .string()
+    .optional()
+    .describe(
+      "also write the packed payload to this local file " +
+        "(auto base64-decodes for .class/.jar/.zip/.ser/.bin); the response gains an " +
+        "outputFile field with the write result. Fails for aggregate packers that " +
+        "return several variants — pick a leaf packer (e.g. DefaultBase64).",
+    ),
 };
 
 const probeInput = {
@@ -97,6 +107,7 @@ const probeInput = {
   server: z.string().optional(),
   reqParamName: z.string().optional(),
   commandTemplate: z.string().optional(),
+  outputFile: memShellInput.outputFile,
 };
 
 const connectInput = {
@@ -284,7 +295,14 @@ export function createMcpServer(client: MemPartyClient): McpServer {
 
   server.registerTool(
     "generate_memshell",
-    { title: "Generate memory shell", description: "Generate a Java memory shell payload", inputSchema: memShellInput },
+    {
+      title: "Generate memory shell",
+      description:
+        "Generate a Java memory shell payload. The packed payload comes back in " +
+        "`packResult`; pass `outputFile` to also write it to a local file " +
+        "(base64 auto-decoded for .class/.jar/.zip/.ser/.bin).",
+      inputSchema: memShellInput,
+    },
     async (args) => {
       const meta = {
         server: args.server,
@@ -297,6 +315,10 @@ export function createMcpServer(client: MemPartyClient): McpServer {
       const started = Date.now();
       try {
         const response = await client.generateMemShell(buildMemShellRequest(args));
+        const outputFile =
+          args.outputFile !== undefined
+            ? emitSinglePackResult(response, { outFile: args.outputFile })
+            : undefined;
         logOp({
           category: "gen",
           action: "gen",
@@ -305,7 +327,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           detail: `${response.memShellResult.shellClassName} (${response.memShellResult.shellSize} bytes)`,
           meta,
         });
-        return jsonContent(response);
+        return jsonContent(outputFile === undefined ? response : { ...response, outputFile });
       } catch (err) {
         logOp({
           category: "gen",
@@ -322,7 +344,14 @@ export function createMcpServer(client: MemPartyClient): McpServer {
 
   server.registerTool(
     "generate_probe",
-    { title: "Generate probe shell", description: "Generate a probe/detection shell payload", inputSchema: probeInput },
+    {
+      title: "Generate probe shell",
+      description:
+        "Generate a probe/detection shell payload. The packed payload comes back in " +
+        "`packResult`; pass `outputFile` to also write it to a local file " +
+        "(base64 auto-decoded for .class/.jar/.zip/.ser/.bin).",
+      inputSchema: probeInput,
+    },
     async (args) => {
       const meta = {
         probeMethod: args.probeMethod,
@@ -333,6 +362,10 @@ export function createMcpServer(client: MemPartyClient): McpServer {
       const started = Date.now();
       try {
         const response = await client.generateProbe(buildProbeRequest(args));
+        const outputFile =
+          args.outputFile !== undefined
+            ? emitSinglePackResult(response, { outFile: args.outputFile })
+            : undefined;
         logOp({
           category: "probe",
           action: "probe",
@@ -341,7 +374,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           detail: `${response.probeShellResult.shellClassName} (${response.probeShellResult.shellSize} bytes)`,
           meta,
         });
-        return jsonContent(response);
+        return jsonContent(outputFile === undefined ? response : { ...response, outputFile });
       } catch (err) {
         logOp({
           category: "probe",

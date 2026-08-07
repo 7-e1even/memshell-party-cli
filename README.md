@@ -172,6 +172,12 @@ memparty exec web1 --cmd "whoami"
 memparty download web1 /etc/passwd -o loot/passwd
 ```
 
+生成时的两个细节：
+
+- `-o` 和 `--json` 可以同时用：文件照常写盘，JSON 里多一个 `outputFile` 字段（路径、大小、是否解码）。
+- 聚合 packer（如 `Base64`，一次返回多个变体）不能配 `-o`，会报错提示你换成叶子 packer（如 `DefaultBase64`）。
+- 走 MCP 时，`generate_memshell` / `generate_probe` 有个 `outputFile` 参数，效果同上。
+
 拿不准有哪些合法取值，直接问后端（这些名字就是参数里要填的值）：
 
 ```bash

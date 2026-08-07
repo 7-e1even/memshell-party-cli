@@ -100,12 +100,18 @@ memparty gen -s Tomcat -t Command -y Filter -p DefaultBase64 \
 
 # Full JSON response (metadata + payload) for further processing
 memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 --json
+
+# Both at once: file written AND full JSON (gains an outputFile field)
+memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 \
+  --godzilla-pass pass --godzilla-key key -o shell.class --json
 ```
 
 `--jdk` accepts `java6/8/9/11/17/21`, a bare number (`8`), or a raw class-file major version (`52`).
 
 Note: some packers (e.g. `Base64`) are *aggregate* packers and return several variants at once;
-pick a leaf packer (e.g. `DefaultBase64`, `GzipBase64`) for a single payload.
+pick a leaf packer (e.g. `DefaultBase64`, `GzipBase64`) for a single payload — `-o` refuses
+aggregate results with an error telling you to pick a leaf. Combining `-o` with `--json` writes
+the file and adds `outputFile: {destination, size, decoded}` to the JSON document.
 
 ### Discovering options
 
@@ -370,6 +376,11 @@ Exposed tools: `list_servers`, `list_config`, `list_packers`, `list_command_conf
 `generate_memshell`, `generate_probe`, `parse_classname`, `server_version`, `connect_test`,
 `exec_command`, `download_file`, `upload_file`, `target_save`, `target_note`, `target_list`,
 `target_remove`, `log_list`.
+
+`generate_memshell` / `generate_probe` return the packed payload in `packResult`; pass the
+optional `outputFile` argument to also write it to a local file (base64 auto-decoded for
+`.class`/`.jar`/`.zip`/`.ser`/`.bin`), and the response gains an `outputFile` field with the
+write result.
 
 ## AI skill
 

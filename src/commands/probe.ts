@@ -2,7 +2,7 @@ import { Command, Option } from "commander";
 
 import { createClient, type GlobalOptions, logInfo } from "../cli-context.js";
 import { logOp } from "../core/oplog.js";
-import { emitPayload } from "../core/output.js";
+import { emitSinglePackResult, hasMultiplePackResults } from "../core/output.js";
 import { buildProbeRequest, type ProbeOptions } from "../core/request-builder.js";
 import { runProbeWizard } from "../wizard/probe-wizard.js";
 
@@ -75,7 +75,7 @@ export function registerProbeCommand(program: Command): void {
     .option("-o, --output <file>", "write payload to a file instead of stdout")
     .addOption(new Option("--decode", "base64-decode the payload before writing"))
     .addOption(new Option("--no-decode", "do not base64-decode the payload"))
-    .option("--json", "print the full JSON response instead of just the payload")
+    .option("--json", "print the full JSON response instead of just the payload (with -o the file is still written and the JSON gains an outputFile field)")
     .option("-i, --interactive", "force the interactive wizard")
     .option("--no-interactive", "never launch the wizard; error on missing flags")
     .addHelpText(
@@ -148,26 +148,35 @@ The server name reported by '-c Server' is the value to pass as
       });
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
+        // -o still writes the payload file in JSON mode; the JSON document
+        // then carries an extra `outputFile` field with the write result.
+        const outputFile =
+          opts.output !== undefined
+            ? emitSinglePackResult(response, { outFile: opts.output, decode: opts.decode })
+            : undefined;
+        const doc = outputFile === undefined ? response : { ...response, outputFile };
+        process.stdout.write(`${JSON.stringify(doc, null, 2)}\n`);
         return;
       }
 
       const r = response.probeShellResult;
       logInfo(`shell class: ${r.shellClassName} (${r.shellSize} bytes)`);
 
-      if (response.allPackResults && Object.keys(response.allPackResults).length > 0) {
-        for (const [name, value] of Object.entries(response.allPackResults)) {
+      if (hasMultiplePackResults(response)) {
+        if (opts.output !== undefined) {
+          throw new Error(
+            `-o cannot write ${Object.keys(response.allPackResults!).length} packer variants to one file. ` +
+              `Pick a leaf packer instead (see 'memparty config packers', e.g. DefaultBase64).`,
+          );
+        }
+        for (const [name, value] of Object.entries(response.allPackResults!)) {
           logInfo(`\n=== ${name} ===`);
           process.stdout.write(`${value}\n`);
         }
         return;
       }
 
-      if (response.packResult === undefined) {
-        throw new Error("Server returned no packResult.");
-      }
-
-      const result = emitPayload(response.packResult, {
+      const result = emitSinglePackResult(response, {
         outFile: opts.output,
         decode: opts.decode,
       });

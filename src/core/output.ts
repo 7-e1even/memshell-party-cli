@@ -69,3 +69,40 @@ export function emitPayload(
   writeStdout(payload.endsWith("\n") ? payload : `${payload}\n`);
   return { destination: "stdout", size: payload.length, decoded: false };
 }
+
+/** The subset of a generate response that carries the packed payload(s). */
+export interface PackResultsShape {
+  packResult?: string;
+  allPackResults?: Record<string, string> | null;
+}
+
+/** True when the response holds several packer variants at once (aggregate packer). */
+export function hasMultiplePackResults(r: PackResultsShape): boolean {
+  return r.allPackResults != null && Object.keys(r.allPackResults).length > 0;
+}
+
+/**
+ * Write a generate response's payload to a file/stdout, requiring a single
+ * packed result. Throws a clear error when an aggregate packer returned
+ * several variants (there is no single file to write) or none at all.
+ */
+export function emitSinglePackResult(
+  r: PackResultsShape,
+  opts: OutputOptions,
+  sinks: {
+    writeFile?: (path: string, data: Buffer | string) => void;
+    writeStdout?: (data: string) => void;
+  } = {},
+): OutputResult {
+  if (hasMultiplePackResults(r)) {
+    const n = Object.keys(r.allPackResults!).length;
+    throw new Error(
+      `the aggregate packer returned ${n} variants at once — cannot write them to a single file. ` +
+        `Pick a leaf packer instead (see 'memparty config packers', e.g. DefaultBase64).`,
+    );
+  }
+  if (r.packResult === undefined) {
+    throw new Error("Server returned no packResult.");
+  }
+  return emitPayload(r.packResult, opts, sinks);
+}
