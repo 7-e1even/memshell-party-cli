@@ -23,6 +23,7 @@ interface TargetSaveOptions {
   headerValue?: string;
   header?: string[];
   profile?: string;
+  upgradeProtocol?: string;
   insecure?: boolean;
   remark?: string;
   category?: string;
@@ -92,6 +93,7 @@ export function registerTargetCommand(program: Command): void {
     .option("--header-value <value>", "gate header value (shellToolConfig.headerValue)")
     .option("-H, --header <line...>", 'extra request header, e.g. -H "Cookie: a=b"')
     .option("--profile <name>", "mimic: site profile name")
+    .option("--upgrade-protocol <className>", "godzilla Upgrade shell: fully-qualified generated shell class name")
     .option("-k, --insecure", "skip TLS certificate verification")
     .option("--remark <text>", "project remark (merged into the project)")
     .option("--category <name>", "project category (merged into the project)")
@@ -140,6 +142,7 @@ save is for choosing the name by hand.
         headerValue: opts.headerValue,
         extraHeaders: parseExtraHeaders(opts.header),
         profile: opts.profile,
+        upgradeProtocol: opts.upgradeProtocol,
         insecure: opts.insecure || undefined,
         remark: opts.shellRemark,
       };

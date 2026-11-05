@@ -26,6 +26,8 @@ Examples:
   $ memparty config tools Tomcat     # tools available on one server (values for gen -t)
   $ memparty config packers          # packer tree (values for gen -p)
   $ memparty config command          # Command-tool encryptors and impl classes
+  $ memparty config tool-configs     # v3+ tool parameter names and enum values
+  $ memparty config obfuscation     # v3+ obfuscation option reference
 `,
     );
 
@@ -67,6 +69,42 @@ Examples:
       const tree = await client.getPackerTree();
       printJsonOrLines(tree, opts.json, () =>
         tree.map((p) => (p.children.length ? `${p.name}\n  ${p.children.join(", ")}` : p.name)),
+      );
+    });
+
+  config
+    .command("tool-configs")
+    .description("List shell tool parameters (empty for v2 backends)")
+    .option("--json", "output raw JSON")
+    .action(async (opts: ConfigCmdOptions, cmd: Command) => {
+      const client = createClient(cmd.optsWithGlobals());
+      const configs = await client.getShellToolConfigs();
+      printJsonOrLines(configs, opts.json, () =>
+        configs.length
+          ? configs.flatMap((config) => [
+              config.tool,
+              ...config.params.map(
+                (param) =>
+                  `  ${param.name} (${param.type})${param.options.length ? `: ${param.options.join(", ")}` : ""}`,
+              ),
+            ])
+          : ["No v3 shell-tool config endpoint on this backend."],
+      );
+    });
+
+  config
+    .command("obfuscation")
+    .description("List obfuscation options (MemShellParty v3+)")
+    .option("--json", "output raw JSON")
+    .action(async (opts: ConfigCmdOptions, cmd: Command) => {
+      const client = createClient(cmd.optsWithGlobals());
+      const options = await client.getObfuscationOptions();
+      printJsonOrLines(options, opts.json, () =>
+        options.map((option) =>
+          Object.entries(option)
+            .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+            .join(" "),
+        ),
       );
     });
 

@@ -64,6 +64,8 @@ export interface CommonConnectOptions {
   extraHeaders?: Record<string, string>;
   timeoutMs?: number;
   insecure?: boolean;
+  /** Tomcat Upgrade shell protocol: the generated shell's fully-qualified class name. */
+  upgradeProtocol?: string;
 }
 
 /** Build the request headers for a tester: extra headers + gate header. */

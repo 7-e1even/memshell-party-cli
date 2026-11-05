@@ -18,6 +18,7 @@ import iconv from "iconv-lite";
 import { GODZILLA_PAYLOAD_BYTES } from "./assets.js";
 import { aesEcbDecrypt, aesEcbEncrypt, gunzipLenient, gzip, md5Hex, md5Key16 } from "./crypto.js";
 import { extractCookies, postRaw } from "./http.js";
+import { isWebSocketUrl, requestWebSocket } from "./websocket.js";
 import {
   buildHeaders,
   type CommonConnectOptions,
@@ -118,7 +119,12 @@ async function openGodzillaSession(
   const right = wrapper.slice(16);
 
   const baseHeaders = buildHeaders(
-    { "Content-Type": "application/x-www-form-urlencoded" },
+    {
+      "Content-Type": "application/x-www-form-urlencoded",
+      ...(options.upgradeProtocol
+        ? { Connection: "Upgrade", Upgrade: options.upgradeProtocol }
+        : {}),
+    },
     options,
   );
   const post = (data: Buffer, cookie?: string) =>
@@ -129,15 +135,28 @@ async function openGodzillaSession(
     });
 
   // ---- request 1: upload the payload class ----
-  const initResponse = await post(GODZILLA_PAYLOAD_BYTES);
-  const cookies = extractCookies(initResponse.headers);
-  const cookie = cookies.length > 0 ? cookies.join("; ") : undefined;
+  let cookie: string | undefined;
+  if (isWebSocketUrl(url)) {
+    await requestWebSocket(url, aesEcbEncrypt(GODZILLA_PAYLOAD_BYTES, xc), options);
+  } else {
+    const initResponse = await post(GODZILLA_PAYLOAD_BYTES);
+    const cookies = extractCookies(initResponse.headers);
+    cookie = cookies.length > 0 ? cookies.join("; ") : undefined;
+  }
 
   return {
     async callMethod(methodName: string, extraParams: Array<[string, Buffer]> = []) {
       const callData = gzip(
         serializeParams([["methodName", Buffer.from(methodName, "utf8")], ...extraParams]),
       );
+      if (isWebSocketUrl(url)) {
+        const response = await requestWebSocket(url, aesEcbEncrypt(callData, xc), options);
+        try {
+          return gunzipLenient(aesEcbDecrypt(response, xc));
+        } catch {
+          throw new Error("WebSocket response failed to decrypt — wrong key or protocol?");
+        }
+      }
       const res = await post(callData, cookie);
       const text = res.body.toString("latin1");
       const leftIdx = text.indexOf(left);

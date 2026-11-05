@@ -45,6 +45,9 @@ export interface MemShellOptions {
   shrink?: boolean;
   lambdaSuffix?: boolean;
   probe?: boolean;
+  obfuscate?: boolean;
+  obfuscationOptions?: Record<string, unknown>;
+  obfuscationScope?: "ALL" | "MEMSHELL_INJECTOR" | "INJECTOR" | "MEMSHELL";
 
   shellClassName?: string;
   godzillaPass?: string;
@@ -80,16 +83,19 @@ export function buildMemShellRequest(opts: MemShellOptions): MemShellGenerateReq
       byPassJavaModule: opts.byPassJavaModule,
       shrink: opts.shrink,
       lambdaSuffix: opts.lambdaSuffix,
-      probe: opts.probe,
+      probe: opts.probe ? { probeMethod: "ResponseBody", probeContent: "Bytecode" } : undefined,
+      obfuscation:
+        opts.obfuscate || opts.obfuscationOptions !== undefined
+          ? { enabled: true, options: opts.obfuscationOptions }
+          : undefined,
+      obfuscationScope: opts.obfuscationScope,
     },
     shellToolConfig: {
       shellClassName: opts.shellClassName,
-      godzillaPass: opts.godzillaPass,
-      godzillaKey: opts.godzillaKey,
-      commandParamName: opts.commandParamName,
-      commandTemplate: opts.commandTemplate,
-      behinderPass: opts.behinderPass,
-      antSwordPass: opts.antSwordPass,
+      pass: opts.godzillaPass ?? opts.behinderPass ?? opts.antSwordPass,
+      key: opts.godzillaKey,
+      paramName: opts.commandParamName,
+      template: opts.commandTemplate,
       headerName: opts.headerName,
       headerValue: opts.headerValue,
       shellClassBase64: opts.shellClassBase64,
@@ -118,6 +124,8 @@ export interface ProbeOptions {
   shrink?: boolean;
   staticInitialize?: boolean;
   lambdaSuffix?: boolean;
+  obfuscate?: boolean;
+  obfuscationOptions?: Record<string, unknown>;
 
   host?: string;
   seconds?: number;
@@ -125,6 +133,7 @@ export interface ProbeOptions {
   server?: string;
   reqParamName?: string;
   commandTemplate?: string;
+  respHeaderName?: string;
 }
 
 export function buildProbeRequest(opts: ProbeOptions): ProbeShellGenerateRequest {
@@ -139,6 +148,10 @@ export function buildProbeRequest(opts: ProbeOptions): ProbeShellGenerateRequest
       shrink: opts.shrink,
       staticInitialize: opts.staticInitialize,
       lambdaSuffix: opts.lambdaSuffix,
+      obfuscation:
+        opts.obfuscate || opts.obfuscationOptions !== undefined
+          ? { enabled: true, options: opts.obfuscationOptions }
+          : undefined,
     },
     probeContentConfig: {
       host: opts.host,
@@ -147,6 +160,7 @@ export function buildProbeRequest(opts: ProbeOptions): ProbeShellGenerateRequest
       server: opts.server,
       reqParamName: opts.reqParamName,
       commandTemplate: opts.commandTemplate,
+      respHeaderName: opts.respHeaderName,
     },
     packer: opts.packer,
   };

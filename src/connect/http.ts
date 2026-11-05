@@ -69,6 +69,19 @@ export function postRaw(
   return new Promise<RawPostResult>((resolve, reject) => {
     const started = Date.now();
     const transport = isHttps ? https : http;
+    const onResponse = (res: http.IncomingMessage) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () =>
+        resolve({
+          status: res.statusCode ?? 0,
+          headers: res.headers,
+          body: Buffer.concat(chunks),
+          durationMs: Date.now() - started,
+        }),
+      );
+      res.on("error", (err) => reject(new HttpRequestError(err.message, url, err)));
+    };
     const req = transport.request(
       {
         method: "POST",
@@ -86,20 +99,11 @@ export function postRaw(
         timeout: timeoutMs,
         ...(isHttps && insecure ? { rejectUnauthorized: false } : {}),
       },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
-        res.on("end", () =>
-          resolve({
-            status: res.statusCode ?? 0,
-            headers: res.headers,
-            body: Buffer.concat(chunks),
-            durationMs: Date.now() - started,
-          }),
-        );
-        res.on("error", (err) => reject(new HttpRequestError(err.message, url, err)));
-      },
+      onResponse,
     );
+    // Node emits `upgrade` for every response when the request itself has an
+    // Upgrade header, even when the server answers with an ordinary HTTP 200.
+    req.on("upgrade", onResponse);
     req.on("timeout", () => req.destroy(new Error(`request timed out after ${timeoutMs} ms`)));
     req.on("error", (err) => reject(new HttpRequestError(err.message, url, err)));
     req.write(body);

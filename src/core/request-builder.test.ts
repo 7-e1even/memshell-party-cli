@@ -22,11 +22,36 @@ describe("buildMemShellRequest", () => {
     expect(req.shellConfig.shellTool).toBe("Godzilla");
     expect(req.shellConfig.shellType).toBe("Listener");
     expect(req.shellConfig.targetJreVersion).toBe(52);
-    expect(req.shellToolConfig.godzillaPass).toBe("pass");
-    expect(req.shellToolConfig.godzillaKey).toBe("key");
+    expect(req.shellToolConfig.pass).toBe("pass");
+    expect(req.shellToolConfig.key).toBe("key");
     expect(req.injectorConfig.urlPattern).toBe("/*");
     expect(req.injectorConfig.staticInitialize).toBe(true);
     expect(req.packer).toBe("Base64");
+  });
+
+  it("maps v3 probe and obfuscation options", () => {
+    const req = buildMemShellRequest({
+      server: "Tomcat",
+      shellTool: "GodzillaSession",
+      shellType: "Filter",
+      packer: "DefaultBase64",
+      godzillaPass: "pass",
+      probe: true,
+      obfuscate: true,
+      obfuscationOptions: { enableControlFlow: false, level: 2 },
+      obfuscationScope: "MEMSHELL",
+    });
+
+    expect(req.shellConfig.probe).toEqual({
+      probeMethod: "ResponseBody",
+      probeContent: "Bytecode",
+    });
+    expect(req.shellConfig.obfuscation).toEqual({
+      enabled: true,
+      options: { enableControlFlow: false, level: 2 },
+    });
+    expect(req.shellConfig.obfuscationScope).toBe("MEMSHELL");
+    expect(req.shellToolConfig.pass).toBe("pass");
   });
 
   it("keeps the provided injector class name for normal packers", () => {
@@ -87,5 +112,23 @@ describe("buildProbeRequest", () => {
     });
     expect(req.probeContentConfig.sleepServer).toBe("Tomcat");
     expect(req.probeContentConfig.seconds).toBe(5);
+  });
+
+  it("maps ResponseHeader and probe obfuscation options", () => {
+    const req = buildProbeRequest({
+      probeMethod: "ResponseHeader",
+      probeContent: "Server",
+      packer: "DefaultBase64",
+      server: "Unknown",
+      respHeaderName: "X-Result",
+      obfuscate: true,
+      obfuscationOptions: { enabledRename: true },
+    });
+
+    expect(req.probeContentConfig.respHeaderName).toBe("X-Result");
+    expect(req.probeConfig.obfuscation).toEqual({
+      enabled: true,
+      options: { enabledRename: true },
+    });
   });
 });

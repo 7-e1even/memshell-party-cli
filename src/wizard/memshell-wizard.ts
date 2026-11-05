@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { checkbox, confirm, input, select, Separator } from "@inquirer/prompts";
+import { checkbox, confirm, input, select } from "@inquirer/prompts";
 
 import type { MemPartyClient } from "../api/client.js";
 import { JDK_VERSIONS } from "../core/jdk.js";
@@ -13,18 +13,6 @@ const JDK_CHOICES = [
     value: name,
   })),
 ];
-
-function packerChoices(tree: { name: string; children: string[] }[]) {
-  const choices: (Separator | { name: string; value: string })[] = [];
-  for (const parent of tree) {
-    choices.push(new Separator(`── ${parent.name} ──`));
-    choices.push({ name: parent.name, value: parent.name });
-    for (const child of parent.children) {
-      choices.push({ name: `  ${child}`, value: child });
-    }
-  }
-  return choices;
-}
 
 /** Drive an interactive prompt flow, returning options for buildMemShellRequest. */
 export async function runMemShellWizard(client: MemPartyClient): Promise<MemShellOptions> {
@@ -46,16 +34,24 @@ export async function runMemShellWizard(client: MemPartyClient): Promise<MemShel
     choices: config[server][shellTool].map((t) => ({ name: t, value: t })),
   });
 
-  const packer = await select({
-    message: "Packer",
-    choices: packerChoices(packerTree),
+  const category = await select({
+    message: "Packer category",
+    choices: packerTree.map((packer) => ({ name: packer.name, value: packer.name })),
   });
+  const selected = packerTree.find((packer) => packer.name === category)!;
+  const packer = selected.children.length
+    ? await select({
+        message: "Packer variant",
+        choices: selected.children.map((name) => ({ name, value: name })),
+      })
+    : category;
 
   const opts: MemShellOptions = { server, shellTool, shellType, packer };
 
   // Tool-specific configuration.
   switch (shellTool) {
     case "Godzilla":
+    case "GodzillaSession":
       opts.godzillaPass = await input({ message: "Godzilla pass", default: "pass" });
       opts.godzillaKey = await input({ message: "Godzilla key", default: "key" });
       break;
@@ -110,6 +106,7 @@ export async function runMemShellWizard(client: MemPartyClient): Promise<MemShel
       { name: "bypass Java module", value: "byPassJavaModule" },
       { name: "lambda suffix", value: "lambdaSuffix" },
       { name: "debug", value: "debug" },
+      { name: "class obfuscation (v3+)", value: "obfuscate" },
     ],
   });
   opts.shrink = toggles.includes("shrink");
@@ -117,6 +114,7 @@ export async function runMemShellWizard(client: MemPartyClient): Promise<MemShel
   opts.byPassJavaModule = toggles.includes("byPassJavaModule");
   opts.lambdaSuffix = toggles.includes("lambdaSuffix");
   opts.debug = toggles.includes("debug");
+  opts.obfuscate = toggles.includes("obfuscate");
 
   const confirmed = await confirm({ message: `Generate ${shellTool} ${shellType} for ${server} (${packer})?` });
   if (!confirmed) {

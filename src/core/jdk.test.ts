@@ -12,6 +12,8 @@ describe("resolveJreVersion", () => {
     expect(resolveJreVersion("java8")).toBe(52);
     expect(resolveJreVersion("JAVA17")).toBe(61);
     expect(resolveJreVersion("java21")).toBe(65);
+    expect(resolveJreVersion("java25")).toBe(69);
+    expect(resolveJreVersion("25")).toBe(69);
   });
 
   it("resolves bare java numbers", () => {

@@ -6,6 +6,7 @@ export const JDK_VERSIONS: Record<string, number> = {
   java11: 55,
   java17: 61,
   java21: 65,
+  java25: 69,
 };
 
 /**

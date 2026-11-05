@@ -3,6 +3,7 @@ import { Command, CommanderError } from "commander";
 import { ApiError } from "./api/client.js";
 import { reportError } from "./cli-context.js";
 import { registerConfigCommand } from "./commands/config.js";
+import { registerBytecodeCommand } from "./commands/bytecode.js";
 import { registerConnectCommand } from "./commands/connect.js";
 import { registerCustomCommand } from "./commands/custom.js";
 import { registerDemoCommand } from "./commands/demo.js";
@@ -59,6 +60,7 @@ Every subcommand has its own examples: memparty <command> --help
   registerGenCommand(program);
   registerProbeCommand(program);
   registerConfigCommand(program);
+  registerBytecodeCommand(program);
   registerConnectCommand(program);
   registerExecCommand(program);
   registerDownloadCommand(program);

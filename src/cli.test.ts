@@ -125,6 +125,15 @@ describe("cli subprocess", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/not-a-protocol.*invalid|Allowed choices/);
   });
+
+  it("save persists a Godzilla Upgrade protocol", () => {
+    const r = run([
+      "save", "lab/upgrade", "-u", "http://192.0.2.1/upgrade", "-t", "godzilla",
+      "--upgrade-protocol", "org.example.Shell", "--json",
+    ]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).upgradeProtocol).toBe("org.example.Shell");
+  });
 });
 
 /** Canned generate response: an 8-byte fake class starting with CAFEBABE. */

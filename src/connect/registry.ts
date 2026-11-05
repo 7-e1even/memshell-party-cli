@@ -43,6 +43,8 @@ export interface ProtocolOptions {
   profile?: string;
   /** mimic: randomize the request path from the site profile. */
   dynamicPath?: boolean;
+  /** godzilla: Upgrade protocol from the generated shell class name. */
+  upgradeProtocol?: string;
 }
 
 /** Everything a protocol handler needs for one operation. */

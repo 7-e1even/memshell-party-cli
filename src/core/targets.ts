@@ -27,6 +27,8 @@ export interface StoredShell {
   insecure?: boolean;
   /** mimic protocol: site profile name (see 'memparty profile'). */
   profile?: string;
+  /** Godzilla Upgrade shell protocol (generated shell class name). */
+  upgradeProtocol?: string;
   /** Free-form note for this shell (e.g. "DMZ 跳板机"). */
   remark?: string;
   createdAt: string;
@@ -182,6 +184,7 @@ export interface ConnectionFlags {
   extraHeaders?: Record<string, string>;
   insecure?: boolean;
   profile?: string;
+  upgradeProtocol?: string;
 }
 
 export interface ResolvedConnection {
@@ -195,6 +198,7 @@ export interface ResolvedConnection {
   insecure?: boolean;
   /** mimic protocol: site profile name. */
   profile?: string;
+  upgradeProtocol?: string;
   /** Canonical `project/shell` reference, when resolved from the store. */
   targetName?: string;
 }
@@ -242,6 +246,7 @@ export function autoSaveShell(conn: ResolvedConnection): string {
     extraHeaders: Object.keys(conn.extraHeaders).length > 0 ? conn.extraHeaders : undefined,
     insecure: conn.insecure,
     profile: conn.profile,
+    upgradeProtocol: conn.upgradeProtocol,
   });
   return `${projectName}/${shellName}`;
 }
@@ -309,6 +314,7 @@ export function resolveConnection(
     extraHeaders: { ...stored?.extraHeaders, ...flags.extraHeaders },
     insecure: flags.insecure ?? stored?.insecure,
     profile: flags.profile ?? stored?.profile,
+    upgradeProtocol: flags.upgradeProtocol ?? stored?.upgradeProtocol,
     targetName,
   };
 }

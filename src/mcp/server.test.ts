@@ -159,6 +159,17 @@ describe("MCP connect_test tool", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("exposes and calls the bytecode tools", async () => {
+    const { tools } = await mcpClient.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["bytecode_decode", "bytecode_transform"]));
+    const decoded = (await mcpClient.callTool({
+      name: "bytecode_decode",
+      arguments: { classBytesBase64: "e30=" },
+    })) as ToolResult;
+    expect(decoded.isError).toBe(true);
+    expect(decoded.content[0]!.text).toContain("/api/bytecode/decode");
+  });
+
   it("lists connect_test with its input schema", async () => {
     const { tools } = await mcpClient.listTools();
     const tool = tools.find((t) => t.name === "connect_test");

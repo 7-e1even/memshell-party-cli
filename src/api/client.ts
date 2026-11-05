@@ -1,13 +1,18 @@
 import type {
   ApiErrorResponse,
+  BytecodeResult,
+  BytecodeTransformRequest,
+  BytecodeTransformResponse,
   CommandConfigVO,
   MainConfig,
   MemShellGenerateRequest,
   MemShellGenerateResponse,
+  ObfuscationOption,
   PackerTree,
   ProbeShellGenerateRequest,
   ProbeShellGenerateResponse,
   ServerConfig,
+  ToolConfigDescriptor,
   VersionInfo,
 } from "./types.js";
 
@@ -43,6 +48,7 @@ export class MemPartyClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
+  private generationApiVersion?: Promise<"v2" | "v3">;
 
   constructor(options: MemPartyClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
@@ -57,8 +63,14 @@ export class MemPartyClient {
 
   // ---------- config ----------
 
-  getServers(): Promise<ServerConfig> {
-    return this.request<ServerConfig>("GET", "/api/config/servers");
+  async getServers(): Promise<ServerConfig> {
+    const config = await this.getConfig();
+    return Object.fromEntries(
+      Object.entries(config).map(([server, tools]) => [
+        server,
+        [...new Set(Object.values(tools).flat())],
+      ]),
+    );
   }
 
   getConfig(): Promise<MainConfig> {
@@ -69,12 +81,48 @@ export class MemPartyClient {
     return this.request<PackerTree>("GET", "/api/config/packers/tree");
   }
 
-  getPackers(): Promise<string[]> {
-    return this.request<string[]>("GET", "/api/config/packers");
+  async getPackers(): Promise<string[]> {
+    try {
+      return await this.request<string[]>("GET", "/api/config/packers");
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.status !== 404) throw err;
+      return (await this.getPackerTree()).map((packer) => packer.name);
+    }
   }
 
-  getCommandConfigs(): Promise<CommandConfigVO> {
+  async getCommandConfigs(): Promise<CommandConfigVO> {
+    const configs = await this.getShellToolConfigs();
+    const command = configs.find((config) => config.tool === "Command");
+    if (command) {
+      return {
+        encryptors: command.params.find((param) => param.name === "encryptor")?.options ?? [],
+        implementationClasses:
+          command.params.find((param) => param.name === "implementationClass")?.options ?? [],
+      };
+    }
     return this.request<CommandConfigVO>("GET", "/api/config/command/configs");
+  }
+
+  async getShellToolConfigs(): Promise<ToolConfigDescriptor[]> {
+    try {
+      return await this.request<ToolConfigDescriptor[]>("GET", "/api/config/shelltool/configs");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return [];
+      throw err;
+    }
+  }
+
+  getObfuscationOptions(): Promise<ObfuscationOption[]> {
+    return this.request<ObfuscationOption[]>("GET", "/api/config/obfuscation/options");
+  }
+
+  async getProbeResponseServers(): Promise<string[]> {
+    try {
+      return await this.request<string[]>("GET", "/api/config/probe/response/servers");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return [];
+      throw err;
+    }
   }
 
   getVersion(): Promise<VersionInfo> {
@@ -83,10 +131,29 @@ export class MemPartyClient {
 
   // ---------- generation ----------
 
-  generateMemShell(req: MemShellGenerateRequest): Promise<MemShellGenerateResponse> {
-    return this.request<MemShellGenerateResponse>("POST", "/api/memshell/generate", {
-      json: req,
-    });
+  async generateMemShell(req: MemShellGenerateRequest): Promise<MemShellGenerateResponse> {
+    const apiVersion = await this.getGenerationApiVersion();
+    try {
+      return await this.request<MemShellGenerateResponse>("POST", "/api/memshell/generate", {
+        json: apiVersion === "v2" ? toLegacyMemShellRequest(req) : req,
+      });
+    } catch (err) {
+      if (apiVersion === "v3" && err instanceof ApiError && /Unsupported packer:/.test(err.message)) {
+        throw new ApiError(
+          `${err.message}. On v3, packer groups are only categories; choose a leaf from 'memparty config packers' (e.g. DefaultBase64, not Base64).`,
+          err.status,
+          err.url,
+        );
+      }
+      throw err;
+    }
+  }
+
+  private getGenerationApiVersion(): Promise<"v2" | "v3"> {
+    this.generationApiVersion ??= this.getVersion()
+      .then((version) => (Number(version.currentVersion.split(".")[0]) >= 3 ? "v3" : "v2"))
+      .catch(() => "v3" as const);
+    return this.generationApiVersion;
   }
 
   generateProbe(req: ProbeShellGenerateRequest): Promise<ProbeShellGenerateResponse> {
@@ -100,6 +167,18 @@ export class MemPartyClient {
     return this.request<string>("POST", "/api/className", {
       text: classBase64,
       raw: true,
+    });
+  }
+
+  decodeBytecode(classBase64: string): Promise<BytecodeResult> {
+    return this.request<BytecodeResult>("POST", "/api/bytecode/decode", {
+      text: classBase64,
+    });
+  }
+
+  transformBytecode(req: BytecodeTransformRequest): Promise<BytecodeTransformResponse> {
+    return this.request<BytecodeTransformResponse>("POST", "/api/bytecode/transform", {
+      json: req,
     });
   }
 
@@ -167,4 +246,26 @@ export class MemPartyClient {
     }
     return JSON.parse(rawText) as T;
   }
+}
+
+function toLegacyMemShellRequest(req: MemShellGenerateRequest): MemShellGenerateRequest {
+  const { pass, key, paramName, template, ...common } = req.shellToolConfig;
+  const { obfuscation: _obfuscation, obfuscationScope: _obfuscationScope, ...shellConfig } =
+    req.shellConfig;
+  return {
+    ...req,
+    shellConfig: {
+      ...shellConfig,
+      probe: shellConfig.probe ? true : undefined,
+    },
+    shellToolConfig: {
+      ...common,
+      godzillaPass: req.shellConfig.shellTool.startsWith("Godzilla") ? pass : undefined,
+      godzillaKey: key,
+      commandParamName: paramName,
+      commandTemplate: template,
+      behinderPass: req.shellConfig.shellTool === "Behinder" ? pass : undefined,
+      antSwordPass: req.shellConfig.shellTool === "AntSword" ? pass : undefined,
+    },
+  };
 }

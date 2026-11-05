@@ -17,6 +17,7 @@ interface ConnectCmdOptions extends GlobalOptions {
   suo5Mode?: ProtocolOptions["suo5Mode"];
   profile?: string;
   dynamicPath?: boolean;
+  upgradeProtocol?: string;
   insecure?: boolean;
   json?: boolean;
   save?: boolean;
@@ -61,6 +62,7 @@ export function registerConnectCommand(program: Command): void {
     )
     .option("--profile <name>", "mimic: site profile name (see 'memparty profile')")
     .option("--dynamic-path", "mimic: randomize the request path from the site profile")
+    .option("--upgrade-protocol <className>", "godzilla Upgrade shell: fully-qualified generated shell class name")
     .option("-k, --insecure", "skip TLS certificate verification")
     .option("--json", "output raw JSON")
     .option("--no-save", "do not auto-save the target after a successful test")
@@ -102,6 +104,7 @@ A successful test auto-saves the profile as <host>/<tool> (skip with
           extraHeaders: parseExtraHeaders(opts.header),
           insecure: opts.insecure,
           profile: opts.profile,
+          upgradeProtocol: opts.upgradeProtocol,
         });
       } catch (err) {
         reportError(err instanceof Error ? err.message : String(err), opts.json ? ["--json"] : []);
@@ -115,6 +118,7 @@ A successful test auto-saves the profile as <host>/<tool> (skip with
         extraHeaders: conn.extraHeaders,
         timeoutMs,
         insecure: conn.insecure,
+        upgradeProtocol: conn.upgradeProtocol,
       };
 
       let result: ConnectTestResult;

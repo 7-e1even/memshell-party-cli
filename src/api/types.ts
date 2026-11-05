@@ -1,6 +1,6 @@
 /**
  * Type definitions mirroring the MemShellParty backend DTOs.
- * Source of truth: boot/src/main/java/com/reajason/javaweb/boot/{dto,vo,controller}
+ * Source of truth: memshell-party-{api,boot} (v3), with legacy v2 transport support.
  */
 
 // ---------- Shared request pieces ----------
@@ -16,16 +16,29 @@ export interface ShellConfig {
   byPassJavaModule?: boolean;
   shrink?: boolean;
   lambdaSuffix?: boolean;
-  probe?: boolean;
+  /** v3 uses a ProbeConfig object; v2 used a boolean switch. */
+  probe?: boolean | ProbeConfig;
+  obfuscation?: ObfuscationConfig;
+  obfuscationScope?: "ALL" | "MEMSHELL_INJECTOR" | "INJECTOR" | "MEMSHELL";
 }
 
 export interface ShellToolConfig {
   shellClassName?: string;
+  pass?: string;
+  key?: string;
+  paramName?: string;
+  template?: string;
+  /** @deprecated MemShellParty v2 request field. */
   godzillaPass?: string;
+  /** @deprecated MemShellParty v2 request field. */
   godzillaKey?: string;
+  /** @deprecated MemShellParty v2 request field. */
   commandParamName?: string;
+  /** @deprecated MemShellParty v2 request field. */
   commandTemplate?: string;
+  /** @deprecated MemShellParty v2 request field. */
   behinderPass?: string;
+  /** @deprecated MemShellParty v2 request field. */
   antSwordPass?: string;
   headerName?: string;
   headerValue?: string;
@@ -38,6 +51,11 @@ export interface InjectorConfig {
   injectorClassName?: string;
   urlPattern?: string;
   staticInitialize?: boolean;
+}
+
+export interface ObfuscationConfig {
+  enabled?: boolean;
+  options?: Record<string, unknown>;
 }
 
 export interface MemShellGenerateRequest {
@@ -70,19 +88,21 @@ export interface MemShellGenerateResponse {
 
 // ---------- Probe ----------
 
-export type ProbeMethod = "ResponseBody" | "DNSLog" | "Sleep";
-export type ProbeContent = "BasicInfo" | "Server" | "OS" | "JDK" | "Bytecode" | "Command";
+export type ProbeMethod = "ResponseBody" | "ResponseHeader" | "DNSLog" | "Sleep";
+export type ProbeContent = "BasicInfo" | "Server" | "OS" | "JDK" | "Bytecode" | "Command" | "ScriptEngine" | "Filter";
 
 export interface ProbeConfig {
   probeMethod: string;
   probeContent: string;
   shellClassName?: string;
+  respHeaderName?: string;
   targetJreVersion?: number;
   debug?: boolean;
   byPassJavaModule?: boolean;
   shrink?: boolean;
   staticInitialize?: boolean;
   lambdaSuffix?: boolean;
+  obfuscation?: ObfuscationConfig;
 }
 
 export interface ProbeContentConfig {
@@ -92,6 +112,7 @@ export interface ProbeContentConfig {
   server?: string;
   reqParamName?: string;
   commandTemplate?: string;
+  respHeaderName?: string;
 }
 
 export interface ProbeShellGenerateRequest {
@@ -114,6 +135,35 @@ export interface ProbeShellGenerateResponse {
   allPackResults?: Record<string, string>;
 }
 
+// ---------- Bytecode tools ----------
+
+export interface BytecodeResult {
+  className: string;
+  size: number;
+  classBytesBase64Str: string;
+}
+
+export interface BytecodeTransformRequest {
+  classBytesBase64: string;
+  packer?: string;
+  byPassJavaModule?: boolean;
+  staticInitialize?: boolean;
+  shrink?: boolean;
+  renamePackage?: boolean;
+  relocateFrom?: string;
+  relocateTo?: string;
+  entryMethod?: string;
+  newClassName?: string;
+  randomName?: boolean;
+  obfuscation?: ObfuscationConfig;
+  server?: string;
+  probe?: ProbeConfig | null;
+}
+
+export interface BytecodeTransformResponse extends BytecodeResult {
+  packResult?: string;
+}
+
 // ---------- Config endpoints ----------
 
 /** server name -> supported shell types */
@@ -132,6 +182,22 @@ export interface CommandConfigVO {
   encryptors: string[];
   implementationClasses: string[];
 }
+
+export interface ToolConfigParam {
+  name: string;
+  type: "string" | "enum";
+  options: string[];
+  group?: string;
+  label?: string;
+  placeholder?: string;
+}
+
+export interface ToolConfigDescriptor {
+  tool: string;
+  params: ToolConfigParam[];
+}
+
+export type ObfuscationOption = Record<string, unknown>;
 
 export interface VersionInfo {
   currentVersion: string;

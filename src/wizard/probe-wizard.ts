@@ -9,12 +9,21 @@ const JDK_CHOICES = [
   ...Object.entries(JDK_VERSIONS).map(([name, major]) => ({ name: `${name} (${major})`, value: name })),
 ];
 
-const PROBE_METHODS = ["ResponseBody", "DNSLog", "Sleep"];
-const PROBE_CONTENTS = ["BasicInfo", "Server", "OS", "JDK", "Bytecode", "Command"];
+const PROBE_METHODS = ["ResponseBody", "ResponseHeader", "DNSLog", "Sleep"];
+const PROBE_CONTENTS = {
+  ResponseBody: ["Server", "Command", "Bytecode", "ScriptEngine", "Filter"],
+  ResponseHeader: ["Server", "Command", "Bytecode", "ScriptEngine", "Filter"],
+  DNSLog: ["Server", "JDK"],
+  Sleep: ["Server"],
+};
 
 export async function runProbeWizard(client: MemPartyClient): Promise<ProbeOptions> {
-  const [config, packerTree] = await Promise.all([client.getConfig(), client.getPackerTree()]);
-  const servers = Object.keys(config);
+  const [packerTree, discoveredServers, config] = await Promise.all([
+    client.getPackerTree(),
+    client.getProbeResponseServers(),
+    client.getConfig(),
+  ]);
+  const servers = discoveredServers.length ? discoveredServers : Object.keys(config);
 
   const probeMethod = await select({
     message: "Probe method",
@@ -23,16 +32,23 @@ export async function runProbeWizard(client: MemPartyClient): Promise<ProbeOptio
 
   const probeContent = await select({
     message: "Probe content",
-    choices: PROBE_CONTENTS.map((c) => ({ name: c, value: c })),
+    choices: PROBE_CONTENTS[probeMethod as keyof typeof PROBE_CONTENTS].map((content) => ({
+      name: content,
+      value: content,
+    })),
   });
 
-  const packer = await select({
-    message: "Packer",
-    choices: packerTree.flatMap((p) => [
-      { name: p.name, value: p.name },
-      ...p.children.map((c) => ({ name: `  ${c}`, value: c })),
-    ]),
+  const category = await select({
+    message: "Packer category",
+    choices: packerTree.map((packer) => ({ name: packer.name, value: packer.name })),
   });
+  const selected = packerTree.find((packer) => packer.name === category)!;
+  const packer = selected.children.length
+    ? await select({
+        message: "Packer variant",
+        choices: selected.children.map((name) => ({ name, value: name })),
+      })
+    : category;
 
   const opts: ProbeOptions = { probeMethod, probeContent, packer };
 
@@ -48,15 +64,19 @@ export async function runProbeWizard(client: MemPartyClient): Promise<ProbeOptio
       opts.seconds = Number(await input({ message: "Seconds", default: "5" }));
       break;
     case "ResponseBody":
+    case "ResponseHeader":
       opts.server = await select({
         message: "Server",
         choices: servers.map((s) => ({ name: s, value: s })),
       });
-      opts.reqParamName = await input({ message: "Request param name", default: "cmd" });
+      opts.reqParamName = await input({ message: "Request param/header name", default: "cmd" });
       opts.commandTemplate = await input({
         message: "Command template (optional, {command} placeholder)",
         default: "",
       });
+      if (probeMethod === "ResponseHeader") {
+        opts.respHeaderName = await input({ message: "Response header name (optional)", default: "" });
+      }
       break;
     default:
       break;
@@ -76,6 +96,7 @@ export async function runProbeWizard(client: MemPartyClient): Promise<ProbeOptio
       { name: "bypass Java module", value: "byPassJavaModule" },
       { name: "lambda suffix", value: "lambdaSuffix" },
       { name: "debug", value: "debug" },
+      { name: "class obfuscation (v3+)", value: "obfuscate" },
     ],
   });
   opts.shrink = toggles.includes("shrink");
@@ -83,6 +104,7 @@ export async function runProbeWizard(client: MemPartyClient): Promise<ProbeOptio
   opts.byPassJavaModule = toggles.includes("byPassJavaModule");
   opts.lambdaSuffix = toggles.includes("lambdaSuffix");
   opts.debug = toggles.includes("debug");
+  opts.obfuscate = toggles.includes("obfuscate");
 
   const confirmed = await confirm({ message: `Generate ${probeMethod} probe (${packer})?` });
   if (!confirmed) throw new Error("Cancelled by user.");

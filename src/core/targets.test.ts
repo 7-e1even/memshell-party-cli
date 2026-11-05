@@ -130,6 +130,16 @@ describe("resolveConnection", () => {
     expect(conn.headerName).toBe("User-Agent");
   });
 
+  it("persists and resolves a Godzilla Upgrade protocol", () => {
+    const conn = resolveConnection(undefined, {
+      url: "http://x/upgrade",
+      tool: "godzilla",
+      upgradeProtocol: "org.example.Shell",
+    });
+    autoSaveShell(conn);
+    expect(resolveConnection("x/godzilla", {}).upgradeProtocol).toBe("org.example.Shell");
+  });
+
   it("throws for unknown projects and shells", () => {
     saveShell("web1", "a", shell);
     expect(() => resolveConnection("nope", {})).toThrow(/unknown project/);

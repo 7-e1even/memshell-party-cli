@@ -107,6 +107,10 @@ function startMock(state: MockState): Promise<Server> {
 
       if (req.headers.cookie?.includes("JSESSIONID=abc123")) {
         state.sawCookieOnSecondRequest = true;
+      } else {
+        // GodzillaSession stores the payload in HttpSession. Without this
+        // cookie a later call must not see the class uploaded by request 1.
+        return fail();
       }
 
       const params = parseSerialized(gunzipLenient(data));

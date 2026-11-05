@@ -4,6 +4,7 @@ import { createClient, type GlobalOptions, logInfo } from "../cli-context.js";
 import { logOp } from "../core/oplog.js";
 import { emitSinglePackResult, hasMultiplePackResults } from "../core/output.js";
 import { buildProbeRequest, type ProbeOptions } from "../core/request-builder.js";
+import { parseObfuscationOptions } from "../core/obfuscation.js";
 import { runProbeWizard } from "../wizard/probe-wizard.js";
 
 interface ProbeCmdOptions extends GlobalOptions {
@@ -15,6 +16,8 @@ interface ProbeCmdOptions extends GlobalOptions {
   bypassModule?: boolean;
   shrink?: boolean;
   lambdaSuffix?: boolean;
+  obfuscate?: boolean;
+  obfuscationOptions?: string;
   staticInitialize?: boolean;
   shellClassName?: string;
   host?: string;
@@ -23,6 +26,7 @@ interface ProbeCmdOptions extends GlobalOptions {
   server?: string;
   reqParamName?: string;
   commandTemplate?: string;
+  respHeaderName?: string;
   output?: string;
   decode?: boolean;
   json?: boolean;
@@ -41,6 +45,8 @@ function toOptions(o: ProbeCmdOptions): ProbeOptions {
     byPassJavaModule: o.bypassModule,
     shrink: o.shrink,
     lambdaSuffix: o.lambdaSuffix,
+    obfuscate: o.obfuscate,
+    obfuscationOptions: parseObfuscationOptions(o.obfuscationOptions),
     staticInitialize: o.staticInitialize,
     shellClassName: o.shellClassName,
     host: o.host,
@@ -49,6 +55,7 @@ function toOptions(o: ProbeCmdOptions): ProbeOptions {
     server: o.server,
     reqParamName: o.reqParamName,
     commandTemplate: o.commandTemplate,
+    respHeaderName: o.respHeaderName,
   };
 }
 
@@ -56,21 +63,24 @@ export function registerProbeCommand(program: Command): void {
   program
     .command("probe")
     .description("Generate a probe/detection shell. Runs an interactive wizard when required flags are missing.")
-    .option("-m, --method <method>", "probe method: ResponseBody, DNSLog, Sleep")
-    .option("-c, --content <content>", "probe content: BasicInfo, Server, OS, JDK, Bytecode, Command")
+    .option("-m, --method <method>", "probe method: ResponseBody, ResponseHeader, DNSLog, Sleep")
+    .option("-c, --content <content>", "probe content: Server, JDK, Bytecode, Command, ScriptEngine, Filter")
     .option("-p, --packer <packer>", "packer, e.g. Base64, JSP")
-    .option("--jdk <version>", "target JDK: java6/8/9/11/17/21, or a class-file major version")
+    .option("--jdk <version>", "target JDK: java6/8/9/11/17/21/25, or a class-file major version")
     .option("--debug", "enable debug output")
     .option("--bypass-module", "bypass Java module restrictions")
     .option("--no-shrink", "disable bytecode shrinking (enabled by default)")
     .option("--lambda-suffix", "append a lambda class-name suffix")
+    .option("--obfuscate", "enable class obfuscation (MemShellParty v3+)")
+    .option("--obfuscation-options <options>", "obfuscation overrides: key=value, comma-separated")
     .option("--no-static-initialize", "disable static initialization (enabled by default)")
     .option("--shell-class-name <name>", "explicit shell class name")
     .option("--host <host>", "DNSLog host (DNSLog method)")
     .option("--seconds <n>", "sleep seconds (Sleep method)")
     .option("--sleep-server <server>", "server to fingerprint (Sleep method)")
-    .option("--server <server>", "server (ResponseBody method)")
-    .option("--req-param-name <name>", "request param name (ResponseBody method)")
+    .option("--server <server>", "server (ResponseBody/ResponseHeader methods; use Unknown if unidentified)")
+    .option("--req-param-name <name>", "request param/header name (ResponseBody/ResponseHeader methods)")
+    .option("--resp-header-name <name>", "response header name (ResponseHeader method)")
     .option("--command-template <tpl>", "command template ({command} placeholder)")
     .option("-o, --output <file>", "write payload to a file instead of stdout")
     .addOption(new Option("--decode", "base64-decode the payload before writing"))
@@ -88,6 +98,7 @@ Examples:
   $ memparty probe -m DNSLog -c Server -p DefaultBase64 --host x.dnslog.cn
   $ memparty probe -m Sleep -c Server -p DefaultBase64 \\
       --sleep-server Tomcat --seconds 5
+  $ memparty probe -m ResponseHeader -c Server -p DefaultBase64 --server Unknown
 
 Note: a probe is a detection shell that reports what the target supports.
 The server name reported by '-c Server' is the value to pass as
