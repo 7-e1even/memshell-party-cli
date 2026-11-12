@@ -463,8 +463,45 @@ function startGenerateApiMock(): Promise<Server> {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
+      if (req.method === "GET" && req.url === "/api/config/shelltool/configs") {
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify([{
+          tool: "Godzilla",
+          params: [
+            { name: "target", type: "object", options: [] },
+            {
+              name: "profileId",
+              type: "string",
+              options: [],
+              ui: {
+                kind: "remote-select",
+                urlQueryParam: "profilesUrl",
+                itemsPath: "data.profiles",
+                labelPath: "name",
+                valuePath: "id",
+                required: false,
+              },
+            },
+          ],
+        }]));
+        return;
+      }
+      if (req.method === "GET" && req.url === "/api/plugins") {
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify([{
+          jarFileName: "demo.jar", name: "Demo", spiServices: ["ShellToolProvider"], loaded: true,
+        }]));
+        return;
+      }
+      if (req.method === "GET" && req.url === "/remote/profiles") {
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({
+          data: { profiles: [{ id: "profile-7", name: "Profile 7" }] },
+        }));
+        return;
+      }
       if (req.method === "POST" && req.url === "/api/memshell/generate") {
-        const body = JSON.parse(Buffer.concat(chunks).toString()) as { packer: string };
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as {
+          packer: string;
+          shellToolConfig?: Record<string, unknown>;
+        };
         const payload =
           body.packer === "Base64"
             ? {
@@ -474,7 +511,10 @@ function startGenerateApiMock(): Promise<Server> {
                   GzipBase64: FAKE_CLASS.toString("base64"),
                 },
               }
-            : { memShellResult, packResult: FAKE_CLASS.toString("base64") };
+            : {
+                memShellResult: { ...memShellResult, shellToolConfig: body.shellToolConfig },
+                packResult: FAKE_CLASS.toString("base64"),
+              };
         res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(payload));
         return;
       }
@@ -486,6 +526,7 @@ function startGenerateApiMock(): Promise<Server> {
 
 describe("MCP generate_memshell tool", () => {
   let apiServer: Server;
+  let apiBase: string;
   let mcpClient: Client;
   let tmpDir: string;
 
@@ -503,9 +544,9 @@ describe("MCP generate_memshell tool", () => {
     process.env.MEMPARTY_TARGETS = join(tmpDir, "targets.json");
 
     apiServer = await startGenerateApiMock();
-    const base = `http://127.0.0.1:${(apiServer.address() as AddressInfo).port}`;
+    apiBase = `http://127.0.0.1:${(apiServer.address() as AddressInfo).port}`;
 
-    const mcpServer = createMcpServer(new MemPartyClient({ baseUrl: base }));
+    const mcpServer = createMcpServer(new MemPartyClient({ baseUrl: apiBase }));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     mcpClient = new Client({ name: "test-client", version: "0.0.0" });
     await Promise.all([mcpClient.connect(clientTransport), mcpServer.connect(serverTransport)]);
@@ -523,7 +564,44 @@ describe("MCP generate_memshell tool", () => {
     const { tools } = await mcpClient.listTools();
     const tool = tools.find((t) => t.name === "generate_memshell");
     const props = (tool!.inputSchema as { properties: Record<string, unknown> }).properties;
-    expect(Object.keys(props)).toContain("outputFile");
+    expect(Object.keys(props)).toEqual(expect.arrayContaining(["outputFile", "toolOptions", "toolOptionJson"]));
+    expect(tools.map((item) => item.name)).toEqual(expect.arrayContaining(["list_plugins", "list_remote_options"]));
+  });
+
+  it("resolves remote select options into values accepted by generation", async () => {
+    const result = (await mcpClient.callTool({
+      name: "list_remote_options",
+      arguments: { tool: "Godzilla", param: "profileId", url: `${apiBase}/remote/profiles` },
+    })) as ToolResult;
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content[0]!.text).options).toEqual([
+      { label: "Profile 7", value: "profile-7" },
+    ]);
+  });
+
+  it("lists external plugin metadata", async () => {
+    const result = (await mcpClient.callTool({ name: "list_plugins", arguments: {} })) as ToolResult;
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content[0]!.text)).toEqual([
+      expect.objectContaining({ name: "Demo", loaded: true }),
+    ]);
+  });
+
+  it("passes v3.1 object and string plugin options to the backend", async () => {
+    const result = (await mcpClient.callTool({
+      name: "generate_memshell",
+      arguments: {
+        ...GEN_ARGS,
+        packer: "DefaultBase64",
+        toolOptions: { target: { id: "web-1", enabled: true } },
+        toolOptionJson: { profileId: "profile-7" },
+      },
+    })) as ToolResult;
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content[0]!.text).memShellResult.shellToolConfig).toMatchObject({
+      target: { id: "web-1", enabled: true },
+      profileId: "profile-7",
+    });
   });
 
   it("writes the decoded payload to outputFile and returns the write result", async () => {

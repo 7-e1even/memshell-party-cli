@@ -22,7 +22,11 @@ export interface ShellConfig {
   obfuscationScope?: "ALL" | "MEMSHELL_INJECTOR" | "INJECTOR" | "MEMSHELL";
 }
 
+export type ShellToolConfigObject = Record<string, unknown>;
+export type ShellToolConfigValue = string | ShellToolConfigObject;
+
 export interface ShellToolConfig {
+  [key: string]: ShellToolConfigValue | undefined;
   shellClassName?: string;
   pass?: string;
   key?: string;
@@ -185,11 +189,12 @@ export interface CommandConfigVO {
 
 export interface ToolConfigParam {
   name: string;
-  type: "string" | "enum";
+  type: "string" | "enum" | "object";
   options: string[];
   group?: string;
   label?: string;
   placeholder?: string;
+  ui?: RemoteSelectUiHint;
 }
 
 export interface ToolConfigDescriptor {
@@ -198,6 +203,29 @@ export interface ToolConfigDescriptor {
 }
 
 export type ObfuscationOption = Record<string, unknown>;
+
+export interface RemoteSelectUiHint {
+  kind: "remote-select";
+  urlQueryParam: string;
+  itemsPath: string;
+  labelPath: string;
+  valuePath?: string;
+  required: boolean;
+}
+
+export interface PluginDescriptor {
+  jarFileName: string;
+  name: string;
+  version?: string | null;
+  author?: string | null;
+  description?: string | null;
+  homepage?: string | null;
+  license?: string | null;
+  source?: string | null;
+  spiServices: string[];
+  loaded: boolean;
+  loadError?: string | null;
+}
 
 export interface VersionInfo {
   currentVersion: string;

@@ -9,6 +9,10 @@ import { buildMemShellRequest, type MemShellOptions } from "../core/request-buil
 import { parseObfuscationOptions } from "../core/obfuscation.js";
 import { agentLoadExamples, supportsAgentLoadArguments } from "../core/agent.js";
 import { runMemShellWizard } from "../wizard/memshell-wizard.js";
+import {
+  parseShellToolConfig,
+  parseToolConfigFile,
+} from "../core/shell-tool-config.js";
 
 interface GenCmdOptions extends GlobalOptions {
   server?: string;
@@ -26,6 +30,8 @@ interface GenCmdOptions extends GlobalOptions {
   obfuscationOptions?: string;
   obfuscationScope?: "ALL" | "MEMSHELL_INJECTOR" | "INJECTOR" | "MEMSHELL";
   shellClassName?: string;
+  toolOption?: string[];
+  toolConfig?: string;
   godzillaPass?: string;
   godzillaKey?: string;
   behinderPass?: string;
@@ -50,11 +56,28 @@ interface GenCmdOptions extends GlobalOptions {
 
 const REQUIRED = ["server", "tool", "type", "packer"] as const;
 
-function toOptions(o: GenCmdOptions): MemShellOptions {
+async function toOptions(o: GenCmdOptions, client: ReturnType<typeof createClient>): Promise<MemShellOptions> {
   let shellClassBase64 = o.shellClassBase64;
   if (o.shellClassFile) {
     shellClassBase64 = readFileSync(o.shellClassFile).toString("base64");
   }
+  const hasPluginOptions = (o.toolOption?.length ?? 0) > 0 || o.toolConfig !== undefined;
+  const toolConfigs = hasPluginOptions ? await client.getShellToolConfigs() : [];
+  const shellToolParams = hasPluginOptions
+    ? toolConfigs.find((config) => config.tool === o.tool)?.params
+    : undefined;
+  const fromFile = o.toolConfig === undefined
+    ? {}
+    : parseToolConfigFile(
+        o.toolConfig.trimStart().startsWith("{")
+          ? o.toolConfig
+          : readFileSync(o.toolConfig, "utf8"),
+        shellToolParams,
+      );
+  const shellToolConfig = {
+    ...fromFile,
+    ...parseShellToolConfig(o.toolOption, shellToolParams),
+  };
   return {
     server: o.server!,
     serverVersion: o.serverVersion,
@@ -71,6 +94,8 @@ function toOptions(o: GenCmdOptions): MemShellOptions {
     obfuscationOptions: parseObfuscationOptions(o.obfuscationOptions),
     obfuscationScope: o.obfuscationScope,
     shellClassName: o.shellClassName,
+    shellToolConfig: hasPluginOptions ? shellToolConfig : undefined,
+    shellToolParams,
     godzillaPass: o.godzillaPass,
     godzillaKey: o.godzillaKey,
     behinderPass: o.behinderPass,
@@ -115,6 +140,13 @@ export function registerGenCommand(program: Command): void {
       ]),
     )
     .option("--shell-class-name <name>", "explicit shell class name (random if omitted)")
+    .option(
+      "--tool-option <name=value>",
+      "shell-tool-specific option; repeat for multiple fields; object values use JSON (v3.1+)",
+      (value, previous: string[] = []) => [...previous, value],
+      [],
+    )
+    .option("--tool-config <json|path>", "shell-tool options as a JSON object or a JSON file path")
     .option("--godzilla-pass <pass>", "Godzilla / GodzillaSession password")
     .option("--godzilla-key <key>", "Godzilla / GodzillaSession key")
     .option("--behinder-pass <pass>", "Behinder password")
@@ -150,6 +182,8 @@ Examples:
       --command-param-name cmd --encryptor RAW --implementation-class RuntimeExec
   $ memparty gen -s Tomcat -t Godzilla -y Listener -p DefaultBase64 --json
   $ memparty gen -s Tomcat -t Godzilla -y AgentFilterChain -p AgentJar --agent-args persist=true
+  $ memparty gen -s Tomcat -t PluginTool -y Filter -p DefaultBase64 \\
+      --tool-option profile='{"id":"web-1","name":"Web"}' --tool-option mode=fast
 
 Note: run 'memparty config' to list the available servers, tools, shell
 types and packers. On v3, parent packers are categories — pick a concrete
@@ -157,6 +191,9 @@ variant (e.g. DefaultBase64 instead of Base64). Legacy v2 backends still
 support aggregate packers, but -o cannot write several variants to one file.
 The --json output includes the gate header (shellToolConfig) you need for
 'memparty connect' / 'memparty exec'.
+Use 'memparty config tool-configs' to discover plugin string, enum and object
+fields. --tool-config can be an inline JSON object or a path to a JSON file.
+Repeated --tool-option values override matching keys from --tool-config.
 `,
     )
     .action(async (opts: GenCmdOptions, cmd: Command) => {
@@ -178,7 +215,7 @@ The --json output includes the gate header (shellToolConfig) you need for
               `Run in a terminal for the wizard, or pass -i.`,
           );
         }
-        memOpts = toOptions(opts);
+        memOpts = await toOptions(opts, client);
       }
 
       const request = buildMemShellRequest(memOpts);

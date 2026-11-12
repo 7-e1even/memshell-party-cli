@@ -1,9 +1,15 @@
 import { Command } from "commander";
 
 import { createClient, type GlobalOptions } from "../cli-context.js";
+import { fetchRemoteOptions } from "../core/shell-tool-config.js";
 
 interface ConfigCmdOptions extends GlobalOptions {
   json?: boolean;
+}
+
+interface RemoteOptionsCmdOptions extends ConfigCmdOptions {
+  url?: string;
+  object?: boolean;
 }
 
 function printJsonOrLines(data: unknown, json: boolean | undefined, renderLines: () => string[]): void {
@@ -28,6 +34,8 @@ Examples:
   $ memparty config command          # Command-tool encryptors and impl classes
   $ memparty config tool-configs     # v3+ tool parameter names and enum values
   $ memparty config obfuscation     # v3+ obfuscation option reference
+  $ memparty config plugins         # v3.1+ external plugin metadata and load status
+  $ memparty config remote-options PluginTool target --url https://example.com/options
 `,
     );
 
@@ -85,11 +93,61 @@ Examples:
               config.tool,
               ...config.params.map(
                 (param) =>
-                  `  ${param.name} (${param.type})${param.options.length ? `: ${param.options.join(", ")}` : ""}`,
+                  `  ${param.name} (${param.type})${param.options.length ? `: ${param.options.join(", ")}` : ""}${param.ui?.kind === "remote-select" ? ` [remote: ${param.ui.urlQueryParam}${param.ui.required ? ", required" : ""}]` : ""}`,
               ),
             ])
           : ["No v3 shell-tool config endpoint on this backend."],
       );
+    });
+
+  config
+    .command("plugins")
+    .description("List external plugin metadata and load status (MemShellParty v3.1+)")
+    .option("--json", "output raw JSON")
+    .action(async (opts: ConfigCmdOptions, cmd: Command) => {
+      const client = createClient(cmd.optsWithGlobals());
+      const plugins = await client.getPlugins();
+      printJsonOrLines(plugins, opts.json, () =>
+        plugins.length
+          ? plugins.flatMap((plugin) => [
+              `${plugin.name}${plugin.version ? ` (${plugin.version})` : ""} [${plugin.loaded ? "loaded" : "not loaded"}]`,
+              `  jar: ${plugin.jarFileName}`,
+              ...(plugin.author ? [`  author: ${plugin.author}`] : []),
+              ...(plugin.description ? [`  description: ${plugin.description}`] : []),
+              ...(plugin.homepage ? [`  homepage: ${plugin.homepage}`] : []),
+              ...(plugin.license ? [`  license: ${plugin.license}`] : []),
+              ...(plugin.source ? [`  source: ${plugin.source}`] : []),
+              ...(plugin.spiServices.length ? [`  SPI: ${plugin.spiServices.join(", ")}`] : []),
+              ...(plugin.loadError ? [`  load error: ${plugin.loadError}`] : []),
+            ])
+          : ["No external plugins (or the backend predates v3.1)."],
+      );
+    });
+
+  config
+    .command("remote-options")
+    .description("Resolve a v3.1 remote-select field into string IDs or complete objects")
+    .argument("<tool>", "shell tool name")
+    .argument("<param>", "remote-select parameter name")
+    .option("--url <url>", "remote JSON endpoint (or set the field's urlQueryParam as an env var)")
+    .option("--object", "return complete objects instead of using the parameter's declared type")
+    .option("--json", "output raw JSON")
+    .action(async (tool: string, paramName: string, opts: RemoteOptionsCmdOptions, cmd: Command) => {
+      const client = createClient(cmd.optsWithGlobals());
+      const descriptor = (await client.getShellToolConfigs()).find((config) => config.tool === tool);
+      const param = descriptor?.params.find((candidate) => candidate.name === paramName);
+      if (!param?.ui || param.ui.kind !== "remote-select") {
+        throw new Error(`${tool}.${paramName} is not a remote-select shell tool option.`);
+      }
+      const sourceUrl = opts.url ?? process.env[param.ui.urlQueryParam];
+      if (!sourceUrl) {
+        throw new Error(`Provide --url or set the ${param.ui.urlQueryParam} environment variable.`);
+      }
+      const options = await fetchRemoteOptions(sourceUrl, param.ui, opts.object ?? param.type === "object");
+      printJsonOrLines(options, opts.json, () => options.map((option, index) => {
+        const value = typeof option.value === "string" ? option.value : JSON.stringify(option.value);
+        return `${index}: ${option.label} => ${value}`;
+      }));
     });
 
   config

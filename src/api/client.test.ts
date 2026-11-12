@@ -79,6 +79,23 @@ describe("MemPartyClient", () => {
     expect(init.body).toBe("QkFTRTY0");
   });
 
+  it("lists v3.1 plugin metadata and treats older 404 backends as empty", async () => {
+    const plugin = {
+      jarFileName: "demo.jar",
+      name: "Demo",
+      version: "1.2.3",
+      spiServices: ["ShellToolProvider"],
+      loaded: true,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse([plugin]))
+      .mockResolvedValueOnce(jsonResponse({ error: "not found" }, { status: 404 }));
+    const client = new MemPartyClient({ baseUrl: "http://host", fetch: fetchMock });
+    await expect(client.getPlugins()).resolves.toEqual([plugin]);
+    await expect(client.getPlugins()).resolves.toEqual([]);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://host/api/plugins");
+  });
+
   it("throws ApiError with the server-provided error message", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: "bad server" }, { status: 400 }));
     const client = new MemPartyClient({ baseUrl: "http://host", fetch: fetchMock });

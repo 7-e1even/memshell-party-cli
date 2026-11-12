@@ -17,7 +17,7 @@ Two equivalent interfaces — pick whichever is available:
 
 - **CLI**: `memparty <command> [flags]` (install: `npm install -g memshell-party-cli`, or `npx memshell-party-cli`).
 - **MCP tools** (if the `memshell-party` MCP server is connected): `list_servers`, `list_config`,
-  `list_packers`, `list_command_configs`, `list_shell_tool_configs`, `list_obfuscation_options`, `generate_memshell`, `generate_probe`, `bytecode_decode`, `bytecode_transform`, `parse_classname`,
+  `list_packers`, `list_command_configs`, `list_shell_tool_configs`, `list_plugins`, `list_remote_options`, `list_obfuscation_options`, `generate_memshell`, `generate_probe`, `bytecode_decode`, `bytecode_transform`, `parse_classname`,
   `server_version`, `connect_test`, `exec_command`, `download_file`, `upload_file`, `target_save`,
   `target_note`, `target_list`, `target_remove`, `log_list`.
 
@@ -36,6 +36,8 @@ memparty config packers            # packer parent/child tree
 memparty config command            # Command-tool encryptors & implementation classes
 memparty config tool-configs       # v3+ shell-tool fields & enum choices
 memparty config obfuscation       # v3+ obfuscation options
+memparty config plugins          # v3.1+ external plugin metadata/load status
+memparty config remote-options PluginTool target --url https://example.com/options --json
 ```
 
 Add `--json` for machine-readable output. Use the exact strings these return.
@@ -141,6 +143,9 @@ Common tool-specific flags:
 - Command: `--command-param-name`, `--encryptor RAW|BASE64|DOUBLE_BASE64`, `--implementation-class RuntimeExec|ForkAndExec`, `--command-template`
 - All webshell tools: `--header-name` / `--header-value` (auth header the shell checks)
 - Custom: `--shell-class-file path.class` (or `--shell-class-base64`)
+- Any built-in or plugin field: repeat `--tool-option name=value`, or use
+  `--tool-config <json|path>`. v3.1 `object` fields use a JSON object, not a stringified scalar.
+  `--tool-option` overrides matching `--tool-config` keys and legacy convenience flags.
 - Injector: `--url-pattern /*`, `--injector-class-name`, `--no-static-initialize`
 - v3+ obfuscation: `--obfuscate`, `--obfuscation-options enableControlFlow=false,...`,
   `--obfuscation-scope ALL|MEMSHELL_INJECTOR|INJECTOR|MEMSHELL`; probe also accepts the first two.
@@ -156,6 +161,27 @@ Output:
   telling you to pick a leaf packer.
 - MCP: `generate_memshell` / `generate_probe` accept an `outputFile` arg with the same
   behavior (auto-decode by extension, write result echoed back as `outputFile`).
+
+### External plugins and remote options (v3.1+)
+
+Use `config tool-configs` (MCP `list_shell_tool_configs`) before generation. Its `object` type
+accepts a JSON object. A `ui.kind=remote-select` field describes `itemsPath`, `labelPath`,
+optional `valuePath`, `required`, and `urlQueryParam`. Resolve it with `config remote-options`
+(MCP `list_remote_options`): a string field sends the selected ID; an object field sends the
+whole selected object. Supply `--url`/`url`, or set the environment variable named by
+`urlQueryParam`. The interactive wizard performs the same remote selection; if it is the sole
+visible parameter, it automatically selects the first result.
+
+```bash
+memparty gen -s Tomcat -t PluginTool -y Filter -p DefaultBase64 \
+  --tool-option mode=fast --tool-option 'target={"id":"web-1","name":"Web"}'
+```
+
+MCP `generate_memshell` takes `toolOptions: {field: "string"}` or
+`toolOptions: {field: {nested: "object"}}`; `toolOptionJson` is the string-encoded alternative.
+Required remote fields are validated locally when metadata is available. Backend plugin
+`validate()` failures are surfaced unchanged. `config plugins` / `list_plugins` exposes plugin
+metadata and load errors, which are informational and not a trust or permission signal.
 
 ### Agent persistence and bytecode tools
 

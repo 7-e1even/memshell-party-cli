@@ -5,7 +5,7 @@
  * help text, exitOverride, REPL, JSON error mode).
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -155,8 +155,49 @@ function startGenerateMock(): Promise<Server> {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
+      if (req.method === "GET" && req.url === "/api/config/shelltool/configs") {
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify([{
+          tool: "PluginTool",
+          params: [
+            { name: "target", type: "object", options: [] },
+            {
+              name: "mode",
+              type: "enum",
+              options: ["fast", "safe"],
+              ui: {
+                kind: "remote-select",
+                urlQueryParam: "modesUrl",
+                itemsPath: "items",
+                labelPath: "name",
+                valuePath: "id",
+                required: false,
+              },
+            },
+          ],
+        }]));
+        return;
+      }
+      if (req.method === "GET" && req.url === "/api/plugins") {
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify([{
+          jarFileName: "plugin.jar",
+          name: "PluginTool",
+          version: "1.0.0",
+          spiServices: ["ShellToolProvider"],
+          loaded: true,
+        }]));
+        return;
+      }
+      if (req.method === "GET" && req.url === "/remote/modes") {
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({
+          items: [{ id: "fast", name: "Fast mode" }],
+        }));
+        return;
+      }
       if (req.method === "POST" && req.url === "/api/memshell/generate") {
-        const body = JSON.parse(Buffer.concat(chunks).toString()) as { packer: string };
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as {
+          packer: string;
+          shellToolConfig?: Record<string, unknown>;
+        };
         // "Base64" stands in for an aggregate packer returning several variants
         const payload =
           body.packer === "Base64"
@@ -167,7 +208,10 @@ function startGenerateMock(): Promise<Server> {
                   GzipBase64: FAKE_CLASS.toString("base64"),
                 },
               }
-            : { memShellResult, packResult: FAKE_CLASS.toString("base64") };
+            : {
+                memShellResult: { ...memShellResult, shellToolConfig: body.shellToolConfig },
+                packResult: FAKE_CLASS.toString("base64"),
+              };
         res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(payload));
         return;
       }
@@ -242,6 +286,40 @@ describe("gen -o against a mock backend", () => {
     const doc = JSON.parse(r.stdout) as Record<string, unknown>;
     expect(doc.packResult).toBe(FAKE_CLASS.toString("base64"));
     expect(doc.outputFile).toBeUndefined();
+  });
+
+  it("passes v3.1 object options and JSON files through to generation", async () => {
+    const configFile = join(storeDir, "plugin-options.json");
+    writeFileSync(configFile, JSON.stringify({ target: { id: "web-1" }, mode: "safe" }));
+    const r = await runAsync([
+      "--api", api,
+      "gen", "-s", "Tomcat", "-t", "PluginTool", "-y", "Filter", "-p", "DefaultBase64",
+      "--tool-config", configFile,
+      "--tool-option", "mode=fast",
+      "--no-interactive", "--json",
+    ]);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe("");
+    const doc = JSON.parse(r.stdout) as {
+      memShellResult: { shellToolConfig: Record<string, unknown> };
+    };
+    expect(doc.memShellResult.shellToolConfig).toEqual({ target: { id: "web-1" }, mode: "fast" });
+  });
+
+  it("lists v3.1 plugin metadata", async () => {
+    const r = await runAsync(["--api", api, "config", "plugins", "--json"]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual([
+      expect.objectContaining({ name: "PluginTool", loaded: true, spiServices: ["ShellToolProvider"] }),
+    ]);
+  });
+
+  it("resolves v3.1 remote options with the CLI", async () => {
+    const r = await runAsync([
+      "--api", api, "config", "remote-options", "PluginTool", "mode", "--url", `${api}/remote/modes`, "--json",
+    ]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual([{ label: "Fast mode", value: "fast" }]);
   });
 
   it("-o with an aggregate packer fails with a leaf-packer hint", async () => {

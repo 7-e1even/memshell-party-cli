@@ -9,6 +9,7 @@ import type {
   MemShellGenerateResponse,
   ObfuscationOption,
   PackerTree,
+  PluginDescriptor,
   ProbeShellGenerateRequest,
   ProbeShellGenerateResponse,
   ServerConfig,
@@ -127,6 +128,15 @@ export class MemPartyClient {
 
   getVersion(): Promise<VersionInfo> {
     return this.request<VersionInfo>("GET", "/api/version");
+  }
+
+  async getPlugins(): Promise<PluginDescriptor[]> {
+    try {
+      return await this.request<PluginDescriptor[]>("GET", "/api/plugins");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return [];
+      throw err;
+    }
   }
 
   // ---------- generation ----------

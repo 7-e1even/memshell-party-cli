@@ -14,6 +14,17 @@ export { emitPayload, shouldDecode, type OutputOptions, type OutputResult } from
 export { resolveApiUrl, DEFAULT_API_URL, ENV_VAR } from "./core/config.js";
 export { resolveJreVersion, JDK_VERSIONS } from "./core/jdk.js";
 export {
+  fetchRemoteOptions,
+  normalizeRemoteOptions,
+  parseShellToolConfig,
+  parseToolConfigFile,
+  readRemotePath,
+  toolConfigForTool,
+  validateRemoteOptionsUrl,
+  validateRequiredRemoteOptions,
+  type RemoteOption,
+} from "./core/shell-tool-config.js";
+export {
   formatOp,
   logOp,
   opLogPath,

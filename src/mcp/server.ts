@@ -23,6 +23,7 @@ import {
 import { buildMemShellRequest } from "../core/request-builder.js";
 import { buildProbeRequest } from "../core/request-builder.js";
 import { parseObfuscationOptions } from "../core/obfuscation.js";
+import { fetchRemoteOptions, parseShellToolConfig } from "../core/shell-tool-config.js";
 import { agentLoadExamples, supportsAgentLoadArguments } from "../core/agent.js";
 import { CLI_VERSION } from "../version.js";
 
@@ -53,6 +54,18 @@ const memShellInput = {
   obfuscationOptions: z.string().optional().describe("obfuscation overrides: key=value, comma-separated"),
   obfuscationScope: z.enum(["ALL", "MEMSHELL_INJECTOR", "INJECTOR", "MEMSHELL"]).optional(),
   shellClassName: z.string().optional(),
+  toolOptions: z
+    .record(z.union([z.string(), z.record(z.unknown())]))
+    .optional()
+    .describe(
+      "Additional shell-tool fields from list_shell_tool_configs, including plugin fields. " +
+        "String/enum fields use strings; v3.1+ object fields use JSON objects. " +
+        "These override matching built-in convenience arguments.",
+    ),
+  toolOptionJson: z
+    .record(z.string())
+    .optional()
+    .describe("String-encoded shell-tool fields (name -> value); object fields contain JSON text."),
   godzillaPass: z.string().optional(),
   godzillaKey: z.string().optional(),
   behinderPass: z.string().optional(),
@@ -409,6 +422,56 @@ export function createMcpServer(client: MemPartyClient): McpServer {
   );
 
   server.registerTool(
+    "list_plugins",
+    {
+      title: "List external plugins",
+      description:
+        "List v3.1+ external plugin metadata, SPI services, load status and load errors. " +
+        "An empty list means no plugins or a backend older than v3.1.",
+    },
+    async () => {
+      try {
+        return jsonContent(await client.getPlugins());
+      } catch (err) {
+        return errorContent(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_remote_options",
+    {
+      title: "Resolve remote shell tool options",
+      description:
+        "Fetch and normalize a v3.1 remote-select field. Returns labels and string IDs or complete objects " +
+        "ready to pass to generate_memshell toolOptions.",
+      inputSchema: {
+        tool: z.string(),
+        param: z.string(),
+        url: z.string().optional().describe("Remote HTTP(S) endpoint; falls back to the urlQueryParam environment variable."),
+        object: z.boolean().optional().describe("Override object mode; normally inferred from the field type."),
+      },
+    },
+    async (args) => {
+      try {
+        const descriptor = (await client.getShellToolConfigs()).find((config) => config.tool === args.tool);
+        const param = descriptor?.params.find((candidate) => candidate.name === args.param);
+        if (!param?.ui || param.ui.kind !== "remote-select") {
+          throw new Error(`${args.tool}.${args.param} is not a remote-select shell tool option.`);
+        }
+        const sourceUrl = args.url ?? process.env[param.ui.urlQueryParam];
+        if (!sourceUrl) {
+          throw new Error(`Provide url or set the ${param.ui.urlQueryParam} environment variable.`);
+        }
+        const options = await fetchRemoteOptions(sourceUrl, param.ui, args.object ?? param.type === "object");
+        return jsonContent({ tool: args.tool, param: args.param, sourceUrl, options });
+      } catch (err) {
+        return errorContent(err);
+      }
+    },
+  );
+
+  server.registerTool(
     "list_obfuscation_options",
     {
       title: "List obfuscation options",
@@ -450,9 +513,23 @@ export function createMcpServer(client: MemPartyClient): McpServer {
               "and an AgentJar, AgentJarWithJDKAttacher, or AgentJarWithJREAttacher packer.",
           );
         }
+        const hasPluginOptions = args.toolOptions !== undefined || args.toolOptionJson !== undefined;
+        const toolConfigs = hasPluginOptions ? await client.getShellToolConfigs() : [];
+        const shellToolParams = hasPluginOptions
+          ? toolConfigs.find((config) => config.tool === args.shellTool)?.params
+          : undefined;
+        const shellToolConfig = {
+          ...args.toolOptions,
+          ...parseShellToolConfig(
+            Object.entries(args.toolOptionJson ?? {}).map(([name, value]) => `${name}=${value}`),
+            shellToolParams,
+          ),
+        };
         const response = await client.generateMemShell(
           buildMemShellRequest({
             ...args,
+            shellToolConfig: hasPluginOptions ? shellToolConfig : undefined,
+            shellToolParams,
             obfuscationOptions: parseObfuscationOptions(args.obfuscationOptions),
           }),
         );

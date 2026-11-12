@@ -3,7 +3,10 @@ import { randomInt } from "node:crypto";
 import type {
   MemShellGenerateRequest,
   ProbeShellGenerateRequest,
+  ShellToolConfigValue,
 } from "../api/types.js";
+import { validateRequiredRemoteOptions } from "./shell-tool-config.js";
+import type { ToolConfigParam } from "../api/types.js";
 import { resolveJreVersion } from "./jdk.js";
 
 /**
@@ -50,6 +53,8 @@ export interface MemShellOptions {
   obfuscationScope?: "ALL" | "MEMSHELL_INJECTOR" | "INJECTOR" | "MEMSHELL";
 
   shellClassName?: string;
+  shellToolConfig?: Record<string, ShellToolConfigValue>;
+  shellToolParams?: ToolConfigParam[];
   godzillaPass?: string;
   godzillaKey?: string;
   commandParamName?: string;
@@ -68,6 +73,7 @@ export interface MemShellOptions {
 }
 
 export function buildMemShellRequest(opts: MemShellOptions): MemShellGenerateRequest {
+  validateRequiredRemoteOptions(opts.shellToolConfig ?? {}, opts.shellToolParams);
   const injectorClassName = SPRING_GZIP_JDK17_RELATED_PACKERS.has(opts.packer)
     ? generateSpringExpressionInjectorClassName()
     : opts.injectorClassName;
@@ -101,6 +107,7 @@ export function buildMemShellRequest(opts: MemShellOptions): MemShellGenerateReq
       shellClassBase64: opts.shellClassBase64,
       encryptor: opts.encryptor,
       implementationClass: opts.implementationClass,
+      ...opts.shellToolConfig,
     },
     injectorConfig: {
       injectorClassName,

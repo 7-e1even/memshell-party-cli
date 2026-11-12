@@ -87,6 +87,45 @@ describe("buildMemShellRequest", () => {
     });
     expect(req.shellConfig.targetJreVersion).toBeUndefined();
   });
+
+  it("passes plugin object parameters and lets them override legacy aliases", () => {
+    const req = buildMemShellRequest({
+      server: "Tomcat",
+      shellTool: "PluginTool",
+      shellType: "Filter",
+      packer: "DefaultBase64",
+      godzillaPass: "legacy-pass",
+      shellToolConfig: {
+        pass: "plugin-pass",
+        target: { id: "web-1", nested: { enabled: true } },
+      },
+    });
+    expect(req.shellToolConfig).toMatchObject({
+      pass: "plugin-pass",
+      target: { id: "web-1", nested: { enabled: true } },
+    });
+  });
+
+  it("checks required v3.1 remote options before sending a request", () => {
+    expect(() => buildMemShellRequest({
+      server: "Tomcat",
+      shellTool: "PluginTool",
+      shellType: "Filter",
+      packer: "DefaultBase64",
+      shellToolParams: [{
+        name: "target",
+        type: "object",
+        options: [],
+        ui: {
+          kind: "remote-select",
+          urlQueryParam: "targetsUrl",
+          itemsPath: "items",
+          labelPath: "name",
+          required: true,
+        },
+      }],
+    })).toThrow(/required remote.*target/);
+  });
 });
 
 describe("buildProbeRequest", () => {

@@ -179,6 +179,8 @@ memparty download web1 /etc/passwd -o loot/passwd
 - `-o` 和 `--json` 可以同时用：文件照常写盘，JSON 里多一个 `outputFile` 字段（路径、大小、是否解码）。
 - v3 中 `Base64` 等父项只是 packer 分类，要选具体变体（如 `DefaultBase64`）；旧 v2 后端仍支持聚合 packer，但不能配 `-o`。
 - v3 支持 `--obfuscate`、`--obfuscation-options key=value,...`、`--obfuscation-scope`（仅内存马）和 `--jdk java25`。
+- v3.1 插件参数可用重复的 `--tool-option name=value` 或 `--tool-config <json|path>` 传入；`object` 类型直接写 JSON 对象。`tool-option` 覆盖同名的旧参数及 `tool-config` 字段。
+- 插件的远程下拉字段可用 `memparty config remote-options <tool> <param> --url <endpoint>` 查询；交互向导会拉取选项，`string` 字段提交 ID，`object` 字段提交完整对象。
 - 探测支持 `-m ResponseHeader`；可用 `--resp-header-name` 指定回显头，未知中间件时 `--server Unknown`。
 - 走 MCP 时，`generate_memshell` / `generate_probe` 有个 `outputFile` 参数，效果同上。
 - Agent 加载参数使用 `--agent-args persist=true` 或 `--agent-args restore=true`；它是 attach 参数，不会发送给生成 API。JSON 和终端会给出 `java -jar agent.jar <pid> persist=true`、`jattach <pid> load instrument false agent.jar=persist=true` 示例。
@@ -204,7 +206,19 @@ memparty config tools Tomcat     # 这个中间件支持哪些工具和挂载类
 memparty config packers          # 打包器列表（按投放方式选）
 memparty config tool-configs     # v3 各工具的参数名和枚举值
 memparty config obfuscation     # v3 混淆参数参考
+memparty config plugins         # v3.1 外置插件、SPI 和加载状态
+memparty config remote-options PluginTool target --url https://example.com/options --json
 ```
+
+插件生成示例：
+
+```bash
+memparty gen -s Tomcat -t PluginTool -y Filter -p DefaultBase64 \
+  --tool-option mode=fast \
+  --tool-option 'target={"id":"web-1","name":"Web"}'
+```
+
+`config tool-configs` 的 `ui.kind=remote-select` 表示远程字段，`urlQueryParam` 是同名的环境变量名；没有 `--url` 时会读这个环境变量。后端参数校验错误会原样返回，不会被 CLI 自动重试。
 
 每个命令都能加 `--help` 看详细参数和例子；完整参数参考见 [英文 README](README.en.md)。
 

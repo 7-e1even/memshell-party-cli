@@ -115,6 +115,23 @@ multiple variants. Combining `-o` with `--json` writes the file and adds
 `outputFile: {destination, size, decoded}` to the JSON document. v3 also supports `--obfuscate`,
 `--obfuscation-options key=value,...`, and `--obfuscation-scope` (memshell only).
 
+For built-in and external plugin fields not covered by a dedicated flag, repeat
+`--tool-option name=value`, or pass `--tool-config <json|path>`. v3.1 `object` fields take JSON
+objects directly. `--tool-config` can be inline JSON or a file path; `--tool-option` overrides
+matching JSON-file keys and legacy convenience flags:
+
+```bash
+memparty gen -s Tomcat -t PluginTool -y Filter -p DefaultBase64 \
+  --tool-option mode=fast \
+  --tool-option 'target={"id":"web-1","name":"Web"}'
+```
+
+The wizard discovers plugin `string`, `enum`, and `object` parameters from the backend. For
+v3.1 `remote-select` fields, it fetches the supplied HTTP(S) JSON endpoint and submits the
+selected ID for a string field or the complete object for an object field. A sole remote field
+selects its first option automatically. Set the environment variable named by `urlQueryParam`
+to avoid entering the endpoint; generation never fetches it again on the backend.
+
 ### Discovering options
 
 ```bash
@@ -124,8 +141,15 @@ memparty config packers          # packer parent/child tree
 memparty config command          # Command encryptors & implementation classes
 memparty config tool-configs     # v3 tool parameters and enum options
 memparty config obfuscation     # v3 obfuscation option reference
+memparty config plugins         # v3.1 plugin metadata, SPI services and load status
+memparty config remote-options PluginTool target --url https://example.com/options --json
 memparty config servers --json   # machine-readable
 ```
+
+`config tool-configs` describes remote metadata as `ui.kind=remote-select`; `config remote-options`
+returns `{label, value}` choices ready to submit. If `--url` is omitted, it reads the environment
+variable named by the field's `urlQueryParam`. Plugin `validate()` errors are returned unchanged
+by the API; the CLI does not hide or retry them.
 
 ### Probe shells
 
@@ -403,7 +427,7 @@ Example Claude Code / Claude Desktop config:
 ```
 
 Exposed tools: `list_servers`, `list_config`, `list_packers`, `list_command_configs`,
-`list_shell_tool_configs`, `list_obfuscation_options`, `generate_memshell`, `generate_probe`, `bytecode_decode`, `bytecode_transform`, `parse_classname`, `server_version`, `connect_test`,
+`list_shell_tool_configs`, `list_plugins`, `list_remote_options`, `list_obfuscation_options`, `generate_memshell`, `generate_probe`, `bytecode_decode`, `bytecode_transform`, `parse_classname`, `server_version`, `connect_test`,
 `exec_command`, `download_file`, `upload_file`, `target_save`, `target_note`, `target_list`,
 `target_remove`, `log_list`.
 
@@ -411,6 +435,11 @@ Exposed tools: `list_servers`, `list_config`, `list_packers`, `list_command_conf
 optional `outputFile` argument to also write it to a local file (base64 auto-decoded for
 `.class`/`.jar`/`.zip`/`.ser`/`.bin`), and the response gains an `outputFile` field with the
 write result.
+
+`generate_memshell` also accepts `toolOptions`: a map of arbitrary shell-tool names to string
+values or JSON objects, including v3.1 plugin parameters. `toolOptionJson` is the string-encoded
+alternative for object fields. Use `list_shell_tool_configs` to discover fields and
+`list_remote_options` to resolve remote dropdowns before generation.
 
 ## AI skill
 
